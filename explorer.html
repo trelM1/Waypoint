@@ -85,6 +85,7 @@
     <div class="row">
       <button id="btnDelete">Delete <kbd>X</kbd></button>
       <button id="btnUndo" class="secondary">Undo <kbd>Z</kbd></button>
+      <button id="btnPreviewReal" class="secondary">See it for real <kbd>V</kbd></button>
     </div>
 
     <h3>3D model (.glb)</h3>
@@ -1902,6 +1903,10 @@
     // ---- panel wiring ----
     $("btnDelete").onclick = deleteSelected;
     $("btnUndo").onclick = undo;
+    $("btnPreviewReal").onclick = () => {
+  if (!selected) return toast("Select a building or model first");
+  previewReal(selected);
+};
     $("btnReplaceModel").onclick = replaceWithModel;
     $("btnPlaceModel").onclick = placeModel;
     $("btnReplaceBlock").onclick = replaceWithBlock;
@@ -1976,6 +1981,216 @@
       return null;
     }
     window.findNearestPhoto = findNearestPhoto;
+        // =====================================================================
+    // 7.6 Isolated cutout render (for compositing onto a real photo)
+    // =====================================================================
+    // headingDeg: compass direction the "camera" faces, matching a photo's compass_angle (0 = north)
+    async function renderCutout(id, headingDeg) {
+      const snapScene = new THREE.Scene();   // no background = transparent
+      snapScene.add(new THREE.HemisphereLight(0xbfdcff, 0x8a8f7a, 0.9));
+      const sun2 = new THREE.DirectionalLight(0xfff2dd, 2.2);
+      sun2.position.set(120, 200, 80);
+      snapScene.add(sun2);
+
+      let centerX = 0, centerZ = 0, objHeight = 10, objRadius = 15;
+
+      if (id.startsWith("pl-")) {
+        const p = placements.find((q) => q.pid === id);
+        const m = p && modelLib.get(p.modelName);
+        if (!p || !m) return null;
+        const holder = makeHolder(p);
+        snapScene.add(holder);
+        centerX = p.x; centerZ = p.z;
+        objHeight = m.size.y * p.sy;
+        objRadius = Math.max(m.size.x * p.sx, m.size.z * p.sz) / 2;
+      } else {
+        const b = buildings.get(id);
+        if (!b) return null;
+        const parts = buildingParts(b);
+        if (!parts) return null;
+        for (const g of parts.walls) snapScene.add(new THREE.Mesh(g, parts.glass ? glassMat : wallMat));
+        for (const g of parts.roofs) snapScene.add(new THREE.Mesh(g, roofMat));
+        const info = footprintInfo(b.footprint);
+        centerX = info.x; centerZ = info.z;
+        objHeight = b.height + (b.roof ? (b.roof.h || 4) : 0);
+        objRadius = Math.max(info.length, info.width) / 2;
+      }
+
+      // Camera placed out along the heading direction, looking back at the building
+      const camDist = objRadius * 2.5 + 15;
+      const rad = (headingDeg * Math.PI) / 180;
+      const camX = centerX - Math.sin(rad) * camDist;
+      const camZ = centerZ + Math.cos(rad) * camDist;
+      const camY = objHeight * 0.55 + 1.6;
+
+      const snapCam = new THREE.PerspectiveCamera(60, 1, 0.1, 2000);
+      snapCam.position.set(camX, camY, camZ);
+      snapCam.lookAt(centerX, objHeight * 0.4, centerZ);
+
+      const SIZE = 1024;
+      const snapRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+      snapRenderer.setSize(SIZE, SIZE);
+      snapRenderer.setClearColor(0x000000, 0);   // fully transparent background
+      snapRenderer.render(snapScene, snapCam);
+
+      const dataUrl = snapRenderer.domElement.toDataURL("image/png");
+
+      snapScene.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+      snapRenderer.dispose();
+
+      return dataUrl;
+    }
+    window.renderCutout = renderCutout;
+
+    // =====================================================================
+    // 7.65 Real camera geometry: where the target actually sits in the photo's frame
+    // =====================================================================
+    const CAMERA_FOV_DEG = 80;   // typical horizontal FOV for phone/action-cam street imagery (Mapillary doesn't reliably report this)
+
+    function bearingDeg(lat1, lng1, lat2, lng2) {
+      const toRad = (d) => d * Math.PI / 180, toDeg = (r) => r * 180 / Math.PI;
+      const y = Math.sin(toRad(lng2 - lng1)) * Math.cos(toRad(lat2));
+      const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lng2 - lng1));
+      return (toDeg(Math.atan2(y, x)) + 360) % 360;
+    }
+    function angleDiff(a, b) {   // shortest signed difference a - b, in [-180, 180]
+      return ((a - b + 540) % 360) - 180;
+    }
+
+    // Where the target building actually falls in this photo's frame, based on real position/heading.
+    function computeFraming(photo, targetLat, targetLng, targetRadius) {
+      const [camLng, camLat] = photo.geometry.coordinates;
+      const distance = distMeters(camLat, camLng, targetLat, targetLng);
+      const bearingToTarget = bearingDeg(camLat, camLng, targetLat, targetLng);
+      const offsetDeg = angleDiff(bearingToTarget, photo.compass_angle);
+      const halfFov = CAMERA_FOV_DEG / 2;
+
+      const visible = Math.abs(offsetDeg) <= halfFov;
+      // perspective-correct horizontal position (not linear - a pinhole-camera tan mapping)
+      const xFrac = 0.5 + 0.5 * (Math.tan((offsetDeg * Math.PI) / 180) / Math.tan((halfFov * Math.PI) / 180));
+      // apparent size from real angular size at this distance
+      const angularWidthDeg = (2 * Math.atan(targetRadius / Math.max(distance, 1)) * 180) / Math.PI;
+      const widthFrac = angularWidthDeg / CAMERA_FOV_DEG;
+
+      return { distance, offsetDeg, visible, xFrac, widthFrac, camLat, camLng };
+    }
+
+        // =====================================================================
+    // 7.7 "See it for real" preview: real photo + rendered cutout, layered with CSS
+    // =====================================================================
+    function worldToLatLng(x, z) {
+      // inverse of latLngToLocal/toWorld
+      const north = -z;
+      return [centerLat + north / M_PER_DEG_LAT, centerLng + x / M_PER_DEG_LNG];
+    }
+
+    function targetWorldCenter(id) {
+  if (id.startsWith("pl-")) {
+    const p = placements.find((q) => q.pid === id);
+    if (!p) return null;
+    const m = modelLib.get(p.modelName);
+    const radius = m ? Math.max(m.size.x * p.sx, m.size.z * p.sz) / 2 : 10;
+    return { x: p.x, z: p.z, radius };
+  }
+  const b = buildings.get(id);
+  if (!b) return null;
+  const info = footprintInfo(b.footprint);
+  return { x: info.x, z: info.z, radius: Math.max(info.length, info.width) / 2 };
+}
+
+    function closePreview() {
+      const el = document.getElementById("realPreview");
+      if (el) el.remove();
+    }
+
+    async function previewReal(id) {
+  const center = targetWorldCenter(id);
+  if (!center) return toast("Select a building or model first");
+  const [lat, lng] = worldToLatLng(center.x, center.z);
+  const isNewBuilding = id.startsWith("pl-") || id.startsWith("custom-");
+
+  toast("Finding a nearby real photo...");
+  const photo = await findNearestPhoto(lat, lng);
+  if (!photo) { toast("No street photo found near this building"); return; }
+
+  closePreview();
+  const wrap = document.createElement("div");
+  wrap.id = "realPreview";
+  wrap.style.cssText = `
+    position:fixed; inset:0; z-index:9999; background:rgba(10,14,18,0.92);
+    display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px;`;
+
+  const stage = document.createElement("div");
+  stage.style.cssText = "position:relative; width:min(90vw,900px); aspect-ratio:1; overflow:hidden; border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,0.5);";
+
+  const photoImg = document.createElement("img");
+  photoImg.src = photo.thumb_1024_url;
+  photoImg.style.cssText = "position:absolute; inset:0; width:100%; height:100%; object-fit:cover;";
+  stage.append(photoImg);
+
+  const controlsBox = document.createElement("div");
+  controlsBox.style.cssText = "display:flex; gap:14px; align-items:center; color:#fff; font:13px sans-serif; background:rgba(255,255,255,0.08); padding:10px 16px; border-radius:10px;";
+
+  const info = document.createElement("div");
+  info.style.cssText = "color:#cbd5df; font:12px sans-serif; text-align:center;";
+
+  if (isNewBuilding) {
+    // Only render + composite for something that doesn't exist in reality yet
+    const wasSelected = selected;
+    selected = null;
+    updateHighlight();
+
+    toast("Rendering...");
+    const cutoutUrl = await renderCutout(id, photo.compass_angle);
+    selected = wasSelected;
+    updateHighlight();
+
+    if (cutoutUrl) {
+      const framing = computeFraming(photo, lat, lng, center.radius);
+      const initWidthPct = Math.min(Math.max(framing.widthFrac * 100, 6), 90);
+      const initLeftPct = Math.min(Math.max(framing.xFrac * 100, 0), 100);
+      const initTopPct = 55;
+
+      const cutoutImg = document.createElement("img");
+      cutoutImg.src = cutoutUrl;
+      cutoutImg.style.cssText = `position:absolute; left:${initLeftPct}%; top:${initTopPct}%; width:${initWidthPct}%; transform:translate(-50%,-50%); pointer-events:none;`;
+      stage.append(cutoutImg);
+
+      info.textContent = `New building — ${Math.round(framing.distance)} m from camera` +
+        (framing.visible ? "" : " — outside this photo's view, position is approximate");
+
+      function slider(label, min, max, val, step, onInput) {
+        const box = document.createElement("label");
+        box.style.cssText = "display:flex; flex-direction:column; gap:4px;";
+        box.textContent = label;
+        const inp = document.createElement("input");
+        Object.assign(inp, { type: "range", min, max, value: val, step });
+        inp.addEventListener("input", () => onInput(+inp.value));
+        box.appendChild(inp);
+        return box;
+      }
+      controlsBox.append(
+        slider("Size", 5, 90, initWidthPct, 1, (v) => cutoutImg.style.width = v + "%"),
+        slider("Left/Right", 0, 100, initLeftPct, 1, (v) => cutoutImg.style.left = v + "%"),
+        slider("Up/Down", 0, 100, initTopPct, 1, (v) => cutoutImg.style.top = v + "%")
+      );
+    } else {
+      info.textContent = "Couldn't render the new building, showing the real photo only.";
+    }
+  } else {
+    // Existing real OSM building: just the real photo, nothing to composite
+    info.textContent = "Real street photo of this building";
+  }
+
+  const closeBtn = document.createElement("button");
+  closeBtn.textContent = "Close";
+  closeBtn.style.cssText = "padding:8px 16px; border:0; border-radius:8px; background:#1d8fe1; color:#fff; font-weight:600; cursor:pointer;";
+  closeBtn.onclick = closePreview;
+
+  wrap.append(stage, info, controlsBox, closeBtn);
+  document.body.appendChild(wrap);
+}
+window.previewReal = previewReal;
 
     // =====================================================================
     // 8. Flycam controls (Minecraft-creative style) + edit shortcuts
@@ -2018,6 +2233,7 @@
       switch (e.code) {
         case "KeyX": case "Delete": deleteSelected(); break;
         case "KeyR": replaceWithModel(); break;
+        case "KeyV": if (selected) previewReal(selected); break;
         case "KeyB": replaceWithBlock(); break;
         case "KeyP": placeModel(); break;
         case "KeyN": placeBlock(); break;
