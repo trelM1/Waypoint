@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <title>Explorer View</title>
   <style>
-    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #87ceeb; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #cfe3f1; }
     #crosshair {
       position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
       width: 6px; height: 6px; border-radius: 50%; background: white;
@@ -40,127 +40,543 @@
   <script type="module">
     import * as THREE from "three";
     import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
+    import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
-    // --- 1. Read the selection passed in from the picker ---
+    // =====================================================================
+    // 1. Read the selection passed in from the picker
+    // =====================================================================
+    console.log("explorer.html v2 (windows, shadows, roads, parks, trees)");
     const params = new URLSearchParams(window.location.search);
-    const centerLat = parseFloat(params.get("lat"));
-    const centerLng = parseFloat(params.get("lng"));
+    let centerLat = parseFloat(params.get("lat"));
+    let centerLng = parseFloat(params.get("lng"));
     const radiusMeters = parseFloat(params.get("radius")) || 300;
 
-    // (Later: use centerLat/centerLng to fetch real building footprints.
-    // For now we just use radiusMeters to size the placeholder scene.)
+    // If this page is opened directly (no ?lat=&lng=), fall back to UWaterloo so it still works.
+    if (!Number.isFinite(centerLat) || !Number.isFinite(centerLng)) {
+      console.warn("No lat/lng in the URL - using UWaterloo as a fallback.");
+      centerLat = 43.4723;
+      centerLng = -80.5449;
+    }
 
-    // --- 2. Basic scene setup ---
+    // =====================================================================
+    // 2. Renderer, camera, sky, lighting
+    // =====================================================================
+    const HORIZON = 0xcfe3f1; // sky colour at the horizon; fog uses the same colour
+
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x87ceeb);
-    scene.fog = new THREE.Fog(0x87ceeb, 50, radiusMeters * 2);
+    scene.background = new THREE.Color(HORIZON);
+    scene.fog = new THREE.Fog(HORIZON, 60, radiusMeters * 2.5);
 
     const camera = new THREE.PerspectiveCamera(
-      75, window.innerWidth / window.innerHeight, 0.1, 5000
+      75, window.innerWidth / window.innerHeight, 0.5, 5000
     );
-    camera.position.set(0, 10, 0); // start a bit above the ground, at the center
+    camera.position.set(0, 10, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.body.appendChild(renderer.domElement);
 
-    // Light
-    const sun = new THREE.DirectionalLight(0xffffff, 1);
-    sun.position.set(100, 200, 100);
-    scene.add(sun);
-    scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+    // Sky dome: a big sphere with a vertical gradient that follows the camera
+    const sky = new THREE.Mesh(
+      new THREE.SphereGeometry(3000, 32, 16),
+      new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        fog: false,
+        uniforms: {
+          topColor: { value: new THREE.Color(0x4a90d9) },
+          horizonColor: { value: new THREE.Color(HORIZON) }
+        },
+        vertexShader: `
+          varying vec3 vDir;
+          void main() {
+            vDir = normalize(position);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }`,
+        fragmentShader: `
+          uniform vec3 topColor;
+          uniform vec3 horizonColor;
+          varying vec3 vDir;
+          void main() {
+            float h = clamp(vDir.y, 0.0, 1.0);
+            gl_FragColor = vec4(mix(horizonColor, topColor, pow(h, 0.55)), 1.0);
+            #include <colorspace_fragment>
+          }`
+      })
+    );
+    sky.renderOrder = -1;
+    scene.add(sky);
 
-    // Ground sized to the selected radius
-    const groundSize = radiusMeters * 2.5;
+    // Soft sky/ground light + a sun that casts shadows
+    scene.add(new THREE.HemisphereLight(0xbfdcff, 0x8a8f7a, 0.9));
+
+    const sun = new THREE.DirectionalLight(0xfff2dd, 2.2);
+    sun.position.set(radiusMeters * 0.7, radiusMeters * 1.3, radiusMeters * 0.5);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(4096, 4096);
+    const sc = sun.shadow.camera;
+    sc.left = -radiusMeters * 1.3; sc.right = radiusMeters * 1.3;
+    sc.top = radiusMeters * 1.3;   sc.bottom = -radiusMeters * 1.3;
+    sc.near = 1; sc.far = radiusMeters * 5;
+    sun.shadow.bias = -0.0004;
+    sun.shadow.normalBias = 0.4;
+    scene.add(sun);
+    scene.add(sun.target);
+
+    // Base ground (big, so its edge is always hidden by fog)
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(groundSize, groundSize),
-      new THREE.MeshStandardMaterial({ color: 0x88aa77 })
+      new THREE.PlaneGeometry(radiusMeters * 12, radiusMeters * 12),
+      new THREE.MeshStandardMaterial({ color: 0xa4ae95, roughness: 1 })
     );
     ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.05;
+    ground.receiveShadow = true;
     scene.add(ground);
 
-    // --- 3. Real buildings from OSM Overpass API ---
+    // =====================================================================
+    // 3. Procedural textures (windows) - drawn on a canvas, no image files
+    // =====================================================================
+    // One tile covers 4 m wide x 3 m tall (roughly one window bay on one floor).
+    const TILE_W = 4, TILE_H = 3;
 
-function latLngToLocal(lat, lng, originLat, originLng) {
-  const metersPerDegLat = 111320;
-  const metersPerDegLng = 111320 * Math.cos(originLat * Math.PI / 180);
-  const x = (lng - originLng) * metersPerDegLng;
-  const z = (lat - originLat) * metersPerDegLat;
-  return [x, z];
-}
+    function makeTileTexture(draw) {
+      const canvas = document.createElement("canvas");
+      canvas.width = 128; canvas.height = 96;
+      draw(canvas.getContext("2d"), canvas.width, canvas.height);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.flipY = false; // wall UVs are in metres with v = -height, so don't flip
+      tex.repeat.set(1 / TILE_W, 1 / TILE_H);
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      return tex;
+    }
 
-function addRealBuilding(footprintPoints, height, color, minHeight = 0) {
-  if (footprintPoints.length < 3) return;
-
-  const shape = new THREE.Shape();
-  shape.moveTo(footprintPoints[0][0], footprintPoints[0][1]);
-  for (let i = 1; i < footprintPoints.length; i++) {
-    shape.lineTo(footprintPoints[i][0], footprintPoints[i][1]);
-  }
-
-  const extrudeHeight = Math.max(height - minHeight, 0.1);
-  const geometry = new THREE.ExtrudeGeometry(shape, { depth: extrudeHeight, bevelEnabled: false });
-  geometry.rotateX(-Math.PI / 2);
-  geometry.translate(0, minHeight, 0); // lift it off the ground
-
-  const mesh = new THREE.Mesh(
-    geometry,
-    new THREE.MeshStandardMaterial({ color })
-  );
-  scene.add(mesh);
-}
-function getBuildingColor(tags, height) {
-  if (tags && tags["building:colour"]) {
-    return new THREE.Color(tags["building:colour"]);
-  }
-  const typeColors = {
-    house: 0xe8c39e,
-    residential: 0xdcdccb,
-    apartments: 0xc9d6df,
-    commercial: 0xb5c9d9,
-    retail: 0xd9c9b5,
-    industrial: 0xaaaaaa,
-    school: 0xf0e0a0,
-    church: 0xd0b0a0,
-    yes: 0xd6d6d6
-  };
-  const type = tags && tags.building;
-  if (type && typeColors[type]) return new THREE.Color(typeColors[type]);
-
-  const t = Math.min(height / 60, 1);
-  return new THREE.Color().setHSL(0.58, 0.12, 0.78 - t * 0.18);
-}
-
-async function loadRealBuildings(originLat, originLng, radius) {
-  const query = `[out:json][timeout:25];way["building"](around:${radius},${originLat},${originLng});out geom;`;
-
-  const response = await fetch("https://overpass-api.de/api/interpreter", {
-    method: "POST",
-    body: query
-  });
-  const data = await response.json();
-
-  data.elements
-    .filter(el => el.type === "way" && el.geometry)
-    .forEach(el => {
-      const footprint = el.geometry.map(pt => latLngToLocal(pt.lat, pt.lon, originLat, originLng));
-      const levels = el.tags && el.tags["building:levels"] ? parseFloat(el.tags["building:levels"]) : 3;
-      const height = el.tags && el.tags.height ? parseFloat(el.tags.height) : levels * 3;
-      const minHeight = el.tags && el.tags.min_height ? parseFloat(el.tags.min_height) : 0;
-      const color = getBuildingColor(el.tags, height);
-      addRealBuilding(footprint, height, color, minHeight);
+    // Wall with a punched window (colour gets multiplied by each building's own colour)
+    const windowTex = makeTileTexture((ctx, w, h) => {
+      ctx.fillStyle = "#f4f1ec"; ctx.fillRect(0, 0, w, h);
+      // sill shadow + window
+      ctx.fillStyle = "#c9c4bc"; ctx.fillRect(30, 22, 68, 54);
+      const g = ctx.createLinearGradient(0, 26, 0, 72);
+      g.addColorStop(0, "#7fa2c4"); g.addColorStop(1, "#3f5a75");
+      ctx.fillStyle = g; ctx.fillRect(34, 26, 60, 46);
+      ctx.fillStyle = "rgba(255,255,255,0.25)"; // reflection streak
+      ctx.beginPath(); ctx.moveTo(34, 26); ctx.lineTo(60, 26); ctx.lineTo(42, 72); ctx.lineTo(34, 72); ctx.fill();
+      ctx.fillStyle = "#e2ddd5"; ctx.fillRect(34, 47, 60, 2); // mullion
+      ctx.fillStyle = "#fbfaf7"; ctx.fillRect(30, 76, 68, 4); // sill
     });
-}
 
-loadRealBuildings(centerLat, centerLng, radiusMeters);
+    // Curtain-wall glass: continuous glazing with a spandrel band per floor
+    const glassTex = makeTileTexture((ctx, w, h) => {
+      const g = ctx.createLinearGradient(0, 0, 0, h);
+      g.addColorStop(0, "#b9d6ea"); g.addColorStop(0.8, "#7ea6c6");
+      ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = "#59707f"; ctx.fillRect(0, 78, w, 18);   // spandrel
+      ctx.fillStyle = "#3c4a55"; ctx.fillRect(0, 0, 3, h);      // mullion
+      ctx.fillStyle = "rgba(255,255,255,0.18)";
+      ctx.beginPath(); ctx.moveTo(10, 0); ctx.lineTo(50, 0); ctx.lineTo(20, 78); ctx.lineTo(0, 78); ctx.fill();
+    });
 
-    // --- 4. Flycam controls (Minecraft-creative style) ---
+    const roofMat  = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, side: THREE.DoubleSide });
+    const wallMat  = new THREE.MeshStandardMaterial({ vertexColors: true, map: windowTex, roughness: 0.9, side: THREE.DoubleSide });
+    const glassMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: glassTex, roughness: 0.25, metalness: 0.1, side: THREE.DoubleSide });
+
+    // =====================================================================
+    // 4. Coordinate helpers
+    // =====================================================================
+    // Local coordinates: x = east (m), north (m). In the 3D world north is -z.
+    function latLngToLocal(lat, lng, originLat, originLng) {
+      const metersPerDegLat = 111320;
+      const metersPerDegLng = 111320 * Math.cos(originLat * Math.PI / 180);
+      return [(lng - originLng) * metersPerDegLng, (lat - originLat) * metersPerDegLat];
+    }
+    const toWorld = (lat, lon) => {
+      const [x, north] = latLngToLocal(lat, lon, centerLat, centerLng);
+      return [x, -north];
+    };
+
+    // Read a numeric OSM tag safely ("12 m" -> 12, junk -> fallback)
+    function num(v, fallback) {
+      const n = parseFloat(v);
+      return Number.isFinite(n) ? n : fallback;
+    }
+
+    // Public Overpass servers are often busy, so try a few in turn.
+    const OVERPASS_URLS = [
+      "https://overpass-api.de/api/interpreter",
+      "https://overpass.kumi.systems/api/interpreter",
+      "https://overpass.private.coffee/api/interpreter"
+    ];
+
+    async function fetchOverpass(query) {
+      let lastError;
+      for (const url of OVERPASS_URLS) {
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: "data=" + encodeURIComponent(query)
+          });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          return JSON.parse(await res.text()); // throws if the server sent an error page
+        } catch (err) {
+          console.warn("Overpass failed at", url, err);
+          lastError = err;
+        }
+      }
+      throw lastError;
+    }
+
+    // =====================================================================
+    // 5. Buildings (merged into 3 meshes: roofs, walls, glass towers)
+    // =====================================================================
+    const MATERIAL_COLORS = {
+      brick: 0xb0654d, concrete: 0xbdbdb5, stone: 0xc9bfa8, wood: 0xa67b50,
+      metal: 0xb5bcc4, glass: 0xcfe3ee, plaster: 0xe6dccb, cement_block: 0xb8b8b0
+    };
+    const TYPE_COLORS = {
+      house: 0xe8c39e, detached: 0xe8c39e, terrace: 0xd9a98a, residential: 0xdcdccb,
+      apartments: 0xc9d6df, commercial: 0xb5c9d9, office: 0xb5c9d9, retail: 0xd9c9b5,
+      industrial: 0xaaaaaa, school: 0xf0e0a0, university: 0xd8c6a5, church: 0xd0b0a0,
+      garage: 0xbdbdbd, garages: 0xbdbdbd, yes: 0xd6d6d6
+    };
+
+    function getWallColor(tags, height) {
+      if (tags["building:colour"]) return new THREE.Color(tags["building:colour"]);
+      const mat = tags["building:material"];
+      if (mat && MATERIAL_COLORS[mat]) return new THREE.Color(MATERIAL_COLORS[mat]);
+      if (tags.building && TYPE_COLORS[tags.building]) return new THREE.Color(TYPE_COLORS[tags.building]);
+      const t = Math.min(height / 60, 1);
+      return new THREE.Color().setHSL(0.58, 0.12, 0.78 - t * 0.18);
+    }
+
+    function getRoofColor(tags) {
+      if (tags["roof:colour"]) return new THREE.Color(tags["roof:colour"]);
+      const houseLike = ["house", "detached", "terrace", "residential", "semidetached_house"];
+      return new THREE.Color(houseLike.includes(tags.building) ? 0x8a5a4b : 0x8b8f93);
+    }
+
+    function isGlassBuilding(tags, height) {
+      return tags["building:material"] === "glass" ||
+             tags["building:cladding"] === "glass" ||
+             height >= 30 ||
+             (tags.building === "office" && height >= 12);
+    }
+
+    // Copy one material group of an ExtrudeGeometry into its own geometry, with a vertex colour
+    function sliceGeometry(geo, start, count, color) {
+      const g = new THREE.BufferGeometry();
+      for (const name of ["position", "normal", "uv"]) {
+        const attr = geo.attributes[name];
+        g.setAttribute(name, new THREE.BufferAttribute(
+          attr.array.slice(start * attr.itemSize, (start + count) * attr.itemSize), attr.itemSize));
+      }
+      const colors = new Float32Array(count * 3);
+      for (let i = 0; i < count; i++) {
+        colors[i * 3] = color.r; colors[i * 3 + 1] = color.g; colors[i * 3 + 2] = color.b;
+      }
+      g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+      return g;
+    }
+
+    function buildExtrusion(footprint, height, minHeight) {
+      if (footprint.length < 3) return null;
+      const shape = new THREE.Shape();
+      shape.moveTo(footprint[0][0], footprint[0][1]);
+      for (let i = 1; i < footprint.length; i++) shape.lineTo(footprint[i][0], footprint[i][1]);
+
+      const geo = new THREE.ExtrudeGeometry(shape, {
+        depth: Math.max(height - minHeight, 0.1), bevelEnabled: false
+      });
+      geo.rotateX(-Math.PI / 2);        // shape XY plane -> ground plane, extrusion -> up
+      geo.translate(0, minHeight, 0);
+      return geo;
+    }
+
+    function addMerged(geos, material) {
+      if (!geos.length) return;
+      const merged = mergeGeometries(geos, false);
+      geos.forEach((g) => g.dispose());
+      if (!merged) return;
+      const mesh = new THREE.Mesh(merged, material);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+    }
+
+    async function loadBuildings() {
+      const query = `[out:json][timeout:25];way["building"](around:${radiusMeters},${centerLat},${centerLng});out geom;`;
+      const data = await fetchOverpass(query);
+      const ways = data.elements.filter((el) => el.type === "way" && el.geometry);
+      console.log("Overpass returned", data.elements.length, "elements,", ways.length, "usable building ways");
+
+      const roofGeos = [], wallGeos = [], glassGeos = [];
+      let added = 0;
+
+      for (const el of ways) {
+        try {
+          const tags = el.tags || {};
+          const footprint = el.geometry.map((pt) => latLngToLocal(pt.lat, pt.lon, centerLat, centerLng));
+          const levels = num(tags["building:levels"], 3);
+          const height = num(tags.height, levels * 3);
+          const minHeight = num(tags.min_height, 0);
+
+          const geo = buildExtrusion(footprint, height, minHeight);
+          if (!geo) continue;
+
+          const wallColor = getWallColor(tags, height);
+          const roofColor = getRoofColor(tags);
+          const wallBucket = isGlassBuilding(tags, height) ? glassGeos : wallGeos;
+
+          // ExtrudeGeometry group 0 = top/bottom caps (roof), group 1 = side walls
+          for (const g of geo.groups) {
+            if (g.materialIndex === 0) roofGeos.push(sliceGeometry(geo, g.start, g.count, roofColor));
+            else wallBucket.push(sliceGeometry(geo, g.start, g.count, wallColor));
+          }
+          geo.dispose();
+          added++;
+        } catch (err) {
+          console.warn("Skipped a building:", err);
+        }
+      }
+
+      addMerged(roofGeos, roofMat);
+      addMerged(wallGeos, wallMat);
+      addMerged(glassGeos, glassMat);
+      console.log(added + " buildings loaded");
+    }
+
+    // =====================================================================
+    // 6. Roads, paths, parks, water and trees
+    // =====================================================================
+    const ROAD_WIDTH = {
+      motorway: 14, motorway_link: 7, trunk: 13, trunk_link: 7, primary: 12, primary_link: 7,
+      secondary: 10, secondary_link: 6, tertiary: 9, tertiary_link: 6, residential: 7.5,
+      unclassified: 7.5, living_street: 6, service: 4.5, road: 7, busway: 6
+    };
+    const PATH_WIDTH = {
+      footway: 2, path: 1.8, pedestrian: 5, cycleway: 2.5, steps: 1.8, track: 3, bridleway: 2
+    };
+
+    // Layer = draw order for flat ground features (higher sits on top)
+    function groundMaterial(color, layer) {
+      return new THREE.MeshStandardMaterial({
+        color, roughness: 1,
+        polygonOffset: true, polygonOffsetFactor: -layer, polygonOffsetUnits: -layer
+      });
+    }
+    function addGroundMesh(geometry, color, layer) {
+      const mesh = new THREE.Mesh(geometry, groundMaterial(color, layer));
+      mesh.position.y = layer * 0.03;
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+    }
+
+    // ---- ribbons (roads/paths) ----
+    function segNormal(a, b) {
+      const dx = b[0] - a[0], dz = b[1] - a[1], len = Math.hypot(dx, dz);
+      return len < 1e-6 ? null : [-dz / len, dx / len];
+    }
+
+    function pushTri(a, b, c, out) {
+      // make sure the triangle faces up (+y)
+      const cross = (b[1] - a[1]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[1] - a[1]);
+      if (cross < 0) { const t = b; b = c; c = t; }
+      out.push(a[0], 0, a[1], b[0], 0, b[1], c[0], 0, c[1]);
+    }
+
+    function addRibbon(rawPts, width, out) {
+      const pts = rawPts.filter((p, i) => i === 0 || Math.hypot(p[0] - rawPts[i - 1][0], p[1] - rawPts[i - 1][1]) > 0.05);
+      if (pts.length < 2) return;
+      const half = width / 2;
+      const left = [], right = [];
+      for (let i = 0; i < pts.length; i++) {
+        const n1 = i > 0 ? segNormal(pts[i - 1], pts[i]) : null;
+        const n2 = i < pts.length - 1 ? segNormal(pts[i], pts[i + 1]) : null;
+        let nx, nz, scale = 1;
+        if (n1 && n2) {
+          nx = n1[0] + n2[0]; nz = n1[1] + n2[1];
+          const len = Math.hypot(nx, nz);
+          if (len < 1e-6) { nx = n1[0]; nz = n1[1]; }
+          else { nx /= len; nz /= len; scale = 1 / Math.max(nx * n1[0] + nz * n1[1], 0.5); } // mitre corners
+        } else {
+          [nx, nz] = n1 || n2;
+        }
+        left.push([pts[i][0] + nx * half * scale, pts[i][1] + nz * half * scale]);
+        right.push([pts[i][0] - nx * half * scale, pts[i][1] - nz * half * scale]);
+      }
+      for (let i = 0; i < pts.length - 1; i++) {
+        pushTri(left[i], right[i], left[i + 1], out);
+        pushTri(right[i], right[i + 1], left[i + 1], out);
+      }
+    }
+
+    function ribbonGeometry(positions) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      const normals = new Float32Array(positions.length);
+      for (let i = 1; i < normals.length; i += 3) normals[i] = 1;
+      g.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+      return g;
+    }
+
+    // ---- flat areas (parks, water, woods) ----
+    function classifyArea(tags) {
+      if (tags.natural === "water" || tags.waterway === "riverbank") return { color: 0x5b9bd5, layer: 2 };
+      if (tags.natural === "wetland") return { color: 0x8fb8a0, layer: 1 };
+      if (tags.natural === "wood" || tags.landuse === "forest") return { color: 0x6fa365, layer: 1 };
+      if (tags.natural === "scrub" || tags.landuse === "orchard") return { color: 0x86ad6f, layer: 1 };
+      if (tags.leisure === "pitch" || tags.leisure === "playground") return { color: 0x7fb56a, layer: 2 };
+      if (tags.landuse === "cemetery") return { color: 0x9db98a, layer: 1 };
+      if (tags.landuse === "farmland" || tags.landuse === "allotments") return { color: 0xc9d29a, layer: 1 };
+      if (tags.leisure || tags.landuse || tags.natural) return { color: 0x8fbf7a, layer: 1 };
+      return null;
+    }
+
+    function addArea(latlonPoints, style) {
+      if (latlonPoints.length < 3) return;
+      try {
+        const shape = new THREE.Shape();
+        latlonPoints.forEach((p, i) => {
+          const [x, north] = latLngToLocal(p.lat, p.lon, centerLat, centerLng);
+          if (i === 0) shape.moveTo(x, north); else shape.lineTo(x, north);
+        });
+        const geo = new THREE.ShapeGeometry(shape);
+        geo.rotateX(-Math.PI / 2); // (x, north) -> (x, 0, -north)
+        addGroundMesh(geo, style.color, style.layer);
+      } catch (err) {
+        console.warn("Skipped an area:", err);
+      }
+    }
+
+    // Join the loose outer edges of a multipolygon relation into closed rings
+    function stitchRings(segments) {
+      const key = (p) => p.lat.toFixed(7) + "," + p.lon.toFixed(7);
+      const segs = segments.filter((s) => s.length > 1).map((s) => s.slice());
+      const rings = [];
+      while (segs.length) {
+        let ring = segs.pop();
+        let changed = true;
+        while (changed && key(ring[0]) !== key(ring[ring.length - 1])) {
+          changed = false;
+          const end = key(ring[ring.length - 1]);
+          for (let i = 0; i < segs.length; i++) {
+            const s = segs[i];
+            if (key(s[0]) === end) { ring = ring.concat(s.slice(1)); segs.splice(i, 1); changed = true; break; }
+            if (key(s[s.length - 1]) === end) { ring = ring.concat(s.slice(0, -1).reverse()); segs.splice(i, 1); changed = true; break; }
+          }
+        }
+        if (ring.length >= 4) rings.push(ring);
+      }
+      return rings;
+    }
+
+    // ---- trees (instanced: thousands cost almost nothing) ----
+    function addTrees(nodes) {
+      const list = nodes.slice(0, 4000);
+      if (!list.length) return;
+      const trunks = new THREE.InstancedMesh(
+        new THREE.CylinderGeometry(0.25, 0.35, 1, 6),
+        new THREE.MeshStandardMaterial({ color: 0x6b4f36, roughness: 1 }), list.length);
+      const crowns = new THREE.InstancedMesh(
+        new THREE.IcosahedronGeometry(1, 1),
+        new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, flatShading: true }), list.length);
+
+      const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
+      const c = new THREE.Color();
+      list.forEach((n, i) => {
+        const [x, z] = toWorld(n.lat, n.lon);
+        const k = 0.8 + ((n.id * 9301 + 49297) % 233280) / 233280 * 0.6; // 0.8 - 1.4, stable per tree
+        const trunkH = 3 * k;
+        p.set(x, trunkH / 2, z); s.set(k, trunkH, k);
+        trunks.setMatrixAt(i, m.compose(p, q, s));
+        const r = 2.6 * k;
+        p.set(x, trunkH + r * 0.7, z); s.set(r, r * 1.1, r);
+        crowns.setMatrixAt(i, m.compose(p, q, s));
+        c.setHSL(0.27 + (k - 1) * 0.08, 0.45, 0.30 + (k - 0.8) * 0.12);
+        crowns.setColorAt(i, c);
+      });
+      for (const mesh of [trunks, crowns]) {
+        mesh.castShadow = true; mesh.receiveShadow = true;
+        mesh.instanceMatrix.needsUpdate = true;
+        scene.add(mesh);
+      }
+      crowns.instanceColor.needsUpdate = true;
+    }
+
+    async function loadEnvironment() {
+      const a = `(around:${radiusMeters},${centerLat},${centerLng})`;
+      const query = `[out:json][timeout:30];(
+        way["highway"]${a};
+        way["leisure"~"^(park|garden|pitch|playground|golf_course|recreation_ground|nature_reserve|common)$"]${a};
+        way["landuse"~"^(grass|forest|meadow|recreation_ground|village_green|cemetery|farmland|orchard|allotments)$"]${a};
+        way["natural"~"^(wood|scrub|grassland|water|wetland)$"]${a};
+        way["waterway"="riverbank"]${a};
+        relation["natural"="water"]${a};
+        relation["leisure"~"^(park|garden|nature_reserve|common)$"]${a};
+        relation["landuse"~"^(grass|forest|meadow|recreation_ground)$"]${a};
+        node["natural"="tree"]${a};
+      );out geom;`;
+      const data = await fetchOverpass(query);
+      console.log("Environment: ", data.elements.length, "elements");
+
+      const roadPos = [], pathPos = [], trees = [];
+
+      for (const el of data.elements) {
+        const tags = el.tags || {};
+
+        if (el.type === "node") { trees.push(el); continue; }
+
+        if (el.type === "way" && el.geometry) {
+          if (tags.highway) {
+            if (tags.tunnel === "yes") continue;
+            const world = el.geometry.map((pt) => toWorld(pt.lat, pt.lon));
+            if (ROAD_WIDTH[tags.highway]) {
+              const lanes = num(tags.lanes, 0);
+              addRibbon(world, num(tags.width, Math.max(ROAD_WIDTH[tags.highway], lanes * 3.3)), roadPos);
+            } else if (PATH_WIDTH[tags.highway]) {
+              addRibbon(world, PATH_WIDTH[tags.highway], pathPos);
+            }
+            continue;
+          }
+          const style = classifyArea(tags);
+          if (style) addArea(el.geometry, style);
+        }
+
+        if (el.type === "relation" && el.members) {
+          const style = classifyArea(tags);
+          if (!style) continue;
+          const outers = el.members
+            .filter((m) => m.type === "way" && m.role === "outer" && m.geometry)
+            .map((m) => m.geometry);
+          stitchRings(outers).forEach((ring) => addArea(ring, style));
+        }
+      }
+
+      if (roadPos.length) addGroundMesh(ribbonGeometry(roadPos), 0x3d4247, 3);
+      if (pathPos.length) addGroundMesh(ribbonGeometry(pathPos), 0xc2bcae, 4);
+      addTrees(trees);
+      console.log("Roads:", roadPos.length / 18, "segments, paths:", pathPos.length / 18, "segments, trees:", trees.length);
+    }
+
+    // Buildings first (so they show up quickly), then the ground details
+    loadBuildings()
+      .catch((err) => console.error("Could not load buildings:", err))
+      .then(() => loadEnvironment())
+      .catch((err) => console.error("Could not load roads/parks/trees:", err));
+
+    // =====================================================================
+    // 7. Flycam controls (Minecraft-creative style)
+    // =====================================================================
     const controls = new PointerLockControls(camera, renderer.domElement);
     document.addEventListener("click", () => controls.lock());
 
     const move = { forward: false, back: false, left: false, right: false, up: false, down: false };
     const velocity = new THREE.Vector3();
-    const speed = 60; // units per second, tweak to taste
+    const speed = 60;
 
     document.addEventListener("keydown", (e) => {
       switch (e.code) {
@@ -205,6 +621,7 @@ loadRealBuildings(centerLat, centerLng, radiusMeters);
         if (move.down) camera.position.y -= speed * delta;
       }
 
+      sky.position.copy(camera.position);
       renderer.render(scene, camera);
     }
     animate();
@@ -214,6 +631,9 @@ loadRealBuildings(centerLat, centerLng, radiusMeters);
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
     });
+
+    // Handy for debugging from the console
+    window.__scene = { scene, camera, renderer };
   </script>
 </body>
 </html>
