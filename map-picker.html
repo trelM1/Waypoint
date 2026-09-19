@@ -92,6 +92,39 @@
     }
     .hint { margin-top: 8px; text-align: center; font-size: 11px; color: var(--muted); }
 
+    /* search */
+    #searchForm { margin: 0; }
+    #searchBox {
+      display: flex; align-items: center; gap: 6px;
+      background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 4px 4px 4px 10px;
+      transition: border-color 0.12s, box-shadow 0.12s;
+    }
+    #searchBox:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(29, 143, 225, 0.18); }
+    #searchBox svg { flex: none; color: var(--muted); }
+    #search {
+      flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
+      font: inherit; font-size: 13.5px; color: var(--ink); padding: 6px 0;
+    }
+    #search::placeholder { color: #98a6b3; }
+    #searchBtn {
+      flex: none; border: 0; border-radius: 7px; padding: 7px 12px; cursor: pointer;
+      background: var(--accent); color: #fff; font: inherit; font-size: 12.5px; font-weight: 600;
+    }
+    #searchBtn:hover:not(:disabled) { background: var(--accent-dark); }
+    #searchBtn:disabled { opacity: 0.6; cursor: progress; }
+    #searchNote { margin: 6px 2px 0; font-size: 11.5px; color: var(--muted); min-height: 14px; }
+    #searchNote.warn { color: #b45309; }
+    #results { margin-top: 6px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #fff; }
+    .result {
+      display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line);
+      background: #fff; padding: 8px 10px; cursor: pointer; font: inherit; color: var(--ink);
+    }
+    .result:last-child { border-bottom: 0; }
+    .result:hover { background: #f4f8fb; }
+    .result.active { background: #eaf4fc; }
+    .result b { display: block; font-size: 13px; font-weight: 600; }
+    .result span { display: block; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
     /* toast */
     #toast {
       position: absolute; top: 20px; left: 50%;
@@ -164,6 +197,18 @@
         <h1>Pick an area</h1>
         <p>Kitchener &ndash; Waterloo</p>
       </div>
+    </div>
+
+    <div class="section">
+      <form id="searchForm" autocomplete="off">
+        <div id="searchBox">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <input id="search" type="text" placeholder="Search a building, e.g. E7 or DC" spellcheck="false" aria-label="Search for a place" />
+          <button type="submit" id="searchBtn">Go</button>
+        </div>
+      </form>
+      <div id="searchNote"></div>
+      <div id="results" hidden></div>
     </div>
 
     <div class="section">
@@ -327,7 +372,7 @@
       return el;
     }
 
-    function setCenter(lngLat, { fly = false } = {}) {
+    function setCenter(lngLat, { fly = false, zoom } = {}) {
       if (!isInside(lngLat)) {
         toast("Pick a spot within Kitchener–Waterloo");
         return false;
@@ -358,7 +403,7 @@
         marker.setLngLat(center);
       }
 
-      if (fly) map.flyTo({ center, zoom: Math.max(map.getZoom(), 14.5), duration: 900 });
+      if (fly) map.flyTo({ center, zoom: zoom ?? Math.max(map.getZoom(), 14.5), duration: 900 });
       refresh();
       return true;
     }
@@ -391,6 +436,142 @@
       $("places").appendChild(b);
     });
 
+    // ---------- search ----------
+    // Finds a place by name using Mapbox search plus OpenStreetMap (Nominatim). Common University of Waterloo
+    // building codes ("E7", "DC", "SLC"...) are expanded to their full names first, because geocoders don't know the codes.
+    const UW_CENTER = [-80.5449, 43.4723];
+    const UW_CODES = {
+      e2: "Engineering 2", e3: "Engineering 3", e5: "Engineering 5", e6: "Engineering 6", e7: "Engineering 7",
+      dc: "William G. Davis Computer Research Centre", mc: "Mathematics and Computer Building", m3: "Mathematics 3",
+      slc: "Student Life Centre", qnc: "Quantum-Nano Centre", dp: "Dana Porter Library", pac: "Physical Activities Complex",
+      dwe: "Douglas Wright Engineering Building", rch: "Rod Coutts Hall", hh: "Hagey Hall", stc: "Science Teaching Complex",
+      ev1: "Environment 1", ev2: "Environment 2", ev3: "Environment 3", b1: "Biology 1", b2: "Biology 2", c2: "Chemistry 2",
+      sch: "South Campus Hall", phy: "Physics Building", cph: "Carl A. Pollock Hall", eit: "Centre for Environmental and Information Technology"
+    };
+
+    async function fetchJSON(url, opts = {}, ms = 9000) {
+      const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), ms);
+      try {
+        const r = await fetch(url, { ...opts, signal: ctrl.signal });
+        if (!r.ok) { const e = new Error("HTTP " + r.status); e.status = r.status; throw e; }
+        return await r.json();
+      } finally { clearTimeout(t); }
+    }
+
+    async function mapboxSearch(q) {
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json` +
+        `?access_token=${encodeURIComponent(mapboxgl.accessToken)}&bbox=${KW_BBOX.join(",")}` +
+        `&proximity=${UW_CENTER.join(",")}&country=ca&language=en&limit=5`;
+      const data = await fetchJSON(url);
+      return (data.features || []).map((f) => ({
+        name: f.text || f.place_name, detail: f.place_name || "", lngLat: f.center
+      }));
+    }
+
+    async function nominatimSearch(q) {
+      const [w, s, e, n] = KW_BBOX;
+      const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=ca&bounded=1` +
+        `&viewbox=${w},${n},${e},${s}&q=${encodeURIComponent(q)}`;
+      const rows = await fetchJSON(url);
+      return rows.map((r) => ({
+        name: r.name || (r.display_name || "").split(",")[0], detail: r.display_name || "", lngLat: [parseFloat(r.lon), parseFloat(r.lat)]
+      }));
+    }
+
+    // what to search for. Mapbox gets full, descriptive queries; OpenStreetMap (Nominatim) is fussy about long
+    // strings, so it gets several shorter variants that are tried one after another until one finds something.
+    function buildQueries(text) {
+      const t = text.trim(), code = UW_CODES[t.toLowerCase().replace(/\s+/g, "")];
+      const uw = ", University of Waterloo, Waterloo, Ontario";
+      const local = /waterloo|kitchener|ontario|laurier/i.test(t);
+      const mapbox = code ? [code + uw, t + " " + code + uw] : local ? [t] : [t, t + uw];
+      const osm = [t];
+      if (code) osm.push(code, code + ", Waterloo", code + ", University of Waterloo");
+      else if (!local) osm.push(t + ", Waterloo");
+      return { mapbox, osm };
+    }
+
+    async function nominatimFirst(variants) {
+      const seen = new Set();
+      for (let i = 0; i < variants.length; i++) {
+        const q = variants[i];
+        if (seen.has(q.toLowerCase())) continue;
+        seen.add(q.toLowerCase());
+        if (seen.size > 1) await new Promise((r) => setTimeout(r, 1100));   // Nominatim asks for at most 1 request per second
+        try {
+          const rows = await nominatimSearch(q);
+          if (rows.length) return rows;
+        } catch (e) { console.warn("Nominatim search failed for", q, e); }
+      }
+      return [];
+    }
+
+    async function findPlaces(text) {
+      const { mapbox, osm } = buildQueries(text);
+      const lists = await Promise.all([
+        ...mapbox.map((q) => mapboxSearch(q).catch((e) => { console.warn("Mapbox search failed", e); return []; })),
+        nominatimFirst(osm)
+      ]);
+      const out = [];
+      for (const list of lists) for (const p of list) {
+        if (!Array.isArray(p.lngLat) || !p.lngLat.every(Number.isFinite) || !isInside(p.lngLat)) continue;
+        const near = (o) => Math.hypot((o.lngLat[0] - p.lngLat[0]) * 80000, (o.lngLat[1] - p.lngLat[1]) * 111000) < 40;
+        if (!out.some(near)) out.push(p);   // skip the same place found twice
+      }
+      return out.slice(0, 5);
+    }
+
+    function setNote(msg, warn = false) {
+      const el = $("searchNote");
+      el.textContent = msg || "";
+      el.classList.toggle("warn", !!warn);
+    }
+
+    function pickPlace(p, row) {
+      if (!setCenter(p.lngLat, { fly: true, zoom: 17 })) return;
+      document.querySelectorAll("#results .result").forEach((r) => r.classList.toggle("active", r === row));
+    }
+
+    function showResults(places) {
+      const box = $("results");
+      box.innerHTML = "";
+      box.hidden = places.length < 2;   // one hit needs no list
+      places.forEach((p, i) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "result" + (i === 0 ? " active" : "");
+        const t = document.createElement("b"), d = document.createElement("span");
+        t.textContent = p.name; d.textContent = p.detail; d.title = p.detail;
+        b.append(t, d);
+        b.onclick = () => pickPlace(p, b);
+        box.appendChild(b);
+      });
+    }
+
+    let searchSeq = 0;
+    async function runSearch(text) {
+      text = text.trim();
+      if (!text) return;
+      const seq = ++searchSeq, btn = $("searchBtn");
+      btn.disabled = true; btn.textContent = "…";
+      setNote("Searching…");
+      try {
+        const places = await findPlaces(text);
+        if (seq !== searchSeq) return;   // a newer search took over
+        showResults(places);
+        if (!places.length) { setNote(`Nothing found in Kitchener–Waterloo for “${text}”. Try the full building name.`, true); return; }
+        pickPlace(places[0], $("results").querySelector(".result"));
+        setNote(places.length > 1 ? "Best match shown. Not right? Pick another below." : "");
+      } catch (e) {
+        console.error(e);
+        if (seq === searchSeq) setNote("Search failed. Check your connection and try again.", true);
+      } finally {
+        if (seq === searchSeq) { btn.disabled = false; btn.textContent = "Go"; }
+      }
+    }
+
+    $("searchForm").addEventListener("submit", (e) => { e.preventDefault(); runSearch($("search").value); });
+    $("search").addEventListener("input", () => { if (!$("search").value.trim()) { setNote(""); showResults([]); } });
+
     // ---------- confirm -> explore view ----------
     function getSelection() {
       if (!center) return null;
@@ -417,6 +598,9 @@
     $("startBtn").addEventListener("click", startApp);
 
     window.addEventListener("keydown", (e) => {
+      const typing = e.target && e.target.id === "search";
+      if (e.key === "/" && !typing && started) { e.preventDefault(); $("search").focus(); return; }   // "/" jumps to search
+      if (typing) return;   // Enter in the search box searches; it must not start or confirm anything
       if (e.key === "Enter" && !e.repeat) {
         e.preventDefault();
         // First Enter dismisses the start screen; later Enters confirm the selection.

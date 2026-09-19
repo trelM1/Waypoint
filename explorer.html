@@ -2321,7 +2321,7 @@
 };
     $("btnReplaceModel").onclick = replaceWithModel;
     $("btnPlaceModel").onclick = placeModel;
-    $("btnStyleAI").onclick = () => styleBuildingsWithAI(10, 2);
+    $("btnStyleAI").onclick = () => styleBuildingsWithAI(2, 2);
     $("modelFile").addEventListener("change", async (e) => {
       for (const f of e.target.files) {
         try { await addModelFile(f); } catch (err) { console.error(err); toast("Couldn't read " + f.name); }
