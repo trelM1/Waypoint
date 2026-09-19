@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Explorer View</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #87ceeb; }
+    #crosshair {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 6px; height: 6px; border-radius: 50%; background: white;
+      box-shadow: 0 0 2px black; pointer-events: none; z-index: 2;
+    }
+    #hint {
+      position: absolute; bottom: 16px; left: 16px; z-index: 2;
+      background: rgba(0,0,0,0.6); color: white; padding: 10px 14px;
+      border-radius: 6px; font-family: sans-serif; font-size: 13px; max-width: 260px;
+    }
+    #backLink {
+      position: absolute; top: 12px; left: 12px; z-index: 2;
+      background: rgba(0,0,0,0.6); color: white; padding: 6px 12px;
+      border-radius: 6px; font-family: sans-serif; font-size: 13px;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="crosshair"></div>
+  <div id="hint">Click anywhere to look around.<br>WASD to move, Space/Shift for up/down, Esc to release.</div>
+  <a id="backLink" href="map-picker.html">&larr; Back to picker</a>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
+
+    // --- 1. Read the selection passed in from the picker ---
+    const params = new URLSearchParams(window.location.search);
+    const centerLat = parseFloat(params.get("lat"));
+    const centerLng = parseFloat(params.get("lng"));
+    const radiusMeters = parseFloat(params.get("radius")) || 300;
+
+    // (Later: use centerLat/centerLng to fetch real building footprints.
+    // For now we just use radiusMeters to size the placeholder scene.)
+
+    // --- 2. Basic scene setup ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87ceeb);
+    scene.fog = new THREE.Fog(0x87ceeb, 50, radiusMeters * 2);
+
+    const camera = new THREE.PerspectiveCamera(
+      75, window.innerWidth / window.innerHeight, 0.1, 5000
+    );
+    camera.position.set(0, 10, 0); // start a bit above the ground, at the center
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Light
+    const sun = new THREE.DirectionalLight(0xffffff, 1);
+    sun.position.set(100, 200, 100);
+    scene.add(sun);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+
+    // Ground sized to the selected radius
+    const groundSize = radiusMeters * 2.5;
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(groundSize, groundSize),
+      new THREE.MeshStandardMaterial({ color: 0x88aa77 })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    scene.add(ground);
+
+    // --- 3. Real buildings from OSM Overpass API ---
+
+function latLngToLocal(lat, lng, originLat, originLng) {
+  const metersPerDegLat = 111320;
+  const metersPerDegLng = 111320 * Math.cos(originLat * Math.PI / 180);
+  const x = (lng - originLng) * metersPerDegLng;
+  const z = (lat - originLat) * metersPerDegLat;
+  return [x, z];
+}
+
+function addRealBuilding(footprintPoints, height, color, minHeight = 0) {
+  if (footprintPoints.length < 3) return;
+
+  const shape = new THREE.Shape();
+  shape.moveTo(footprintPoints[0][0], footprintPoints[0][1]);
+  for (let i = 1; i < footprintPoints.length; i++) {
+    shape.lineTo(footprintPoints[i][0], footprintPoints[i][1]);
+  }
+
+  const extrudeHeight = Math.max(height - minHeight, 0.1);
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth: extrudeHeight, bevelEnabled: false });
+  geometry.rotateX(-Math.PI / 2);
+  geometry.translate(0, minHeight, 0); // lift it off the ground
+
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshStandardMaterial({ color })
+  );
+  scene.add(mesh);
+}
+function getBuildingColor(tags, height) {
+  if (tags && tags["building:colour"]) {
+    return new THREE.Color(tags["building:colour"]);
+  }
+  const typeColors = {
+    house: 0xe8c39e,
+    residential: 0xdcdccb,
+    apartments: 0xc9d6df,
+    commercial: 0xb5c9d9,
+    retail: 0xd9c9b5,
+    industrial: 0xaaaaaa,
+    school: 0xf0e0a0,
+    church: 0xd0b0a0,
+    yes: 0xd6d6d6
+  };
+  const type = tags && tags.building;
+  if (type && typeColors[type]) return new THREE.Color(typeColors[type]);
+
+  const t = Math.min(height / 60, 1);
+  return new THREE.Color().setHSL(0.58, 0.12, 0.78 - t * 0.18);
+}
+
+async function loadRealBuildings(originLat, originLng, radius) {
+  const query = `[out:json][timeout:25];way["building"](around:${radius},${originLat},${originLng});out geom;`;
+
+  const response = await fetch("https://overpass-api.de/api/interpreter", {
+    method: "POST",
+    body: query
+  });
+  const data = await response.json();
+
+  data.elements
+    .filter(el => el.type === "way" && el.geometry)
+    .forEach(el => {
+      const footprint = el.geometry.map(pt => latLngToLocal(pt.lat, pt.lon, originLat, originLng));
+      const levels = el.tags && el.tags["building:levels"] ? parseFloat(el.tags["building:levels"]) : 3;
+      const height = el.tags && el.tags.height ? parseFloat(el.tags.height) : levels * 3;
+      const minHeight = el.tags && el.tags.min_height ? parseFloat(el.tags.min_height) : 0;
+      const color = getBuildingColor(el.tags, height);
+      addRealBuilding(footprint, height, color, minHeight);
+    });
+}
+
+loadRealBuildings(centerLat, centerLng, radiusMeters);
+
+    // --- 4. Flycam controls (Minecraft-creative style) ---
+    const controls = new PointerLockControls(camera, renderer.domElement);
+    document.addEventListener("click", () => controls.lock());
+
+    const move = { forward: false, back: false, left: false, right: false, up: false, down: false };
+    const velocity = new THREE.Vector3();
+    const speed = 60; // units per second, tweak to taste
+
+    document.addEventListener("keydown", (e) => {
+      switch (e.code) {
+        case "KeyW": move.forward = true; break;
+        case "KeyS": move.back = true; break;
+        case "KeyA": move.left = true; break;
+        case "KeyD": move.right = true; break;
+        case "Space": move.up = true; break;
+        case "ShiftLeft": move.down = true; break;
+      }
+    });
+    document.addEventListener("keyup", (e) => {
+      switch (e.code) {
+        case "KeyW": move.forward = false; break;
+        case "KeyS": move.back = false; break;
+        case "KeyA": move.left = false; break;
+        case "KeyD": move.right = false; break;
+        case "Space": move.up = false; break;
+        case "ShiftLeft": move.down = false; break;
+      }
+    });
+
+    let lastTime = performance.now();
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const now = performance.now();
+      const delta = (now - lastTime) / 1000;
+      lastTime = now;
+
+      velocity.set(0, 0, 0);
+      if (move.forward) velocity.z -= 1;
+      if (move.back) velocity.z += 1;
+      if (move.left) velocity.x -= 1;
+      if (move.right) velocity.x += 1;
+      velocity.normalize();
+
+      if (controls.isLocked) {
+        controls.moveRight(velocity.x * speed * delta);
+        controls.moveForward(-velocity.z * speed * delta);
+        if (move.up) camera.position.y += speed * delta;
+        if (move.down) camera.position.y -= speed * delta;
+      }
+
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>

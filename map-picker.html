@@ -428,12 +428,11 @@
     }
 
     function confirmSelection() {
-      const selection = getSelection();
-      if (!selection) { toast("Click the map to choose a spot first"); return; }
-      // Hook for the explore view: define window.onPickerConfirm, or listen for the event.
-      window.dispatchEvent(new CustomEvent("picker:confirm", { detail: selection }));
-      if (typeof window.onPickerConfirm === "function") window.onPickerConfirm(selection);
-    }
+  const selection = getSelection();
+  if (!selection) { toast("Click the map to choose a spot first"); return; }
+  const [lng, lat] = selection.center;
+  window.location.href = `explorer.html?lat=${lat}&lng=${lng}&radius=${selection.radiusMeters}`;
+}
 
     $("confirm").addEventListener("click", confirmSelection);
 
