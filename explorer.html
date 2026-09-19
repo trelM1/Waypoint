@@ -1450,6 +1450,7 @@
         const id = "osm-" + el.id;
         buildings.set(id, {
           id, footprint, height: wallHeight, roof, kind: tags.building || "yes",
+          name: tags.name || null,
           minHeight: num(tags.min_height, 0),
           wallColor: getWallColor(tags, totalHeight).getHex(),
           roofColor: getRoofColor(tags).getHex(),
@@ -2666,7 +2667,7 @@ window.previewReal = previewReal;
     }
   }
 }
-    async function analyzeBuildingStyle(photoUrls) {
+            async function analyzeBuildingStyle(photoUrls) {
       const prompt = `You are looking at ${photoUrls.length} street photo(s) of the same building, taken from different angles/sides. ` +
         'Synthesize an overall exterior style for the WHOLE building, not just what one photo shows. ' +
         'Return ONLY compact JSON, no markdown, no explanation: ' +
@@ -2691,6 +2692,32 @@ window.previewReal = previewReal;
       const text = json.choices?.[0]?.message?.content || "";
       const match = text.match(/\{[\s\S]*\}/);
       if (!match) throw new Error("No JSON in vision response");
+      return JSON.parse(match[0]);
+    }
+
+    async function analyzeBuildingByName(name) {
+      const prompt = `You are asked about the real building named "${name}". ` +
+        'Only answer if you have specific, reliable knowledge of this exact building\'s real exterior appearance ' +
+        '(e.g. it is a well-known landmark, university building, or notable structure you genuinely know). ' +
+        'Do NOT guess or invent details for buildings you are not confident about. ' +
+        'Return ONLY compact JSON: {"wallColor":"#rrggbb","roofColor":"#rrggbb","material":"brick|concrete|glass|stone|wood|stucco|other","glass":true|false,"confidence":0.0}. ' +
+        'If you are not genuinely certain, set confidence to 0.';
+
+      const res = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${OPENAI_API_KEY}` },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 150,
+          temperature: 0
+        })
+      });
+      if (!res.ok) throw new Error("OpenAI HTTP " + res.status);
+      const json = await res.json();
+      const text = json.choices?.[0]?.message?.content || "";
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error("No JSON in response");
       return JSON.parse(match[0]);
     }
 
@@ -2720,19 +2747,24 @@ window.previewReal = previewReal;
           try {
             const [lat, lng] = worldToLatLng(it.info.x, it.info.z);
             const radius = Math.max(it.info.length, it.info.width) / 2;
-            const photos = await withRetry(() => findMultiSidePhotos(lat, lng, radius, 3));
-            if (!photos.length) { noPhoto++; }
-            else {
-              const style = await withRetry(() => analyzeBuildingStyle(photos.map((p) => p.photo.thumb_1024_url)));
-              if (style.confidence >= 0.5) {
-                if (style.wallColor) it.b.wallColor = parseInt(style.wallColor.replace("#", ""), 16);
-                if (style.roofColor) it.b.roofColor = parseInt(style.roofColor.replace("#", ""), 16);
-                if (typeof style.glass === "boolean") it.b.glass = style.glass;
-                it.b.aiStyled = true;
-                it.b.aiPhotoCount = photos.length;
-                styled++;
-              } else lowConf++;
-            }
+           const photos = await withRetry(() => findMultiSidePhotos(lat, lng, radius, 3));
+            let style = null, source = "photo";
+if (photos.length) {
+  style = await withRetry(() => analyzeBuildingStyle(photos.map((p) => p.photo.thumb_1024_url)));
+} else if (it.b.name) {
+  style = await withRetry(() => analyzeBuildingByName(it.b.name));
+  source = "name-knowledge";
+}
+
+if (!style) { noPhoto++; }
+else if (style.confidence >= 0.5) {
+  if (style.wallColor) it.b.wallColor = parseInt(style.wallColor.replace("#", ""), 16);
+  if (style.roofColor) it.b.roofColor = parseInt(style.roofColor.replace("#", ""), 16);
+  if (typeof style.glass === "boolean") it.b.glass = style.glass;
+  it.b.aiStyled = true;
+  it.b.aiSource = source;
+  styled++;
+} else lowConf++;
           } catch (err) {
             console.warn("AI styling failed for", it.b.id, err);
             failed++;
@@ -2753,6 +2785,8 @@ window.previewReal = previewReal;
     window.styleBuildingsWithAI = styleBuildingsWithAI;
     window.analyzeBuildingStyle = analyzeBuildingStyle;
     window.findMultiSidePhotos = findMultiSidePhotos;
+
+
 
     // =====================================================================
     // 8. Flycam controls (Minecraft-creative style) + edit shortcuts
