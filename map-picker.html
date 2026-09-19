@@ -65,23 +65,6 @@
     #readout .v { font-variant-numeric: tabular-nums; font-weight: 600; }
 
     /* radius */
-    .radius-head { display: flex; justify-content: space-between; align-items: baseline; }
-    #radiusValue { font-weight: 700; font-size: 18px; font-variant-numeric: tabular-nums; }
-    input[type=range] {
-      -webkit-appearance: none; appearance: none;
-      width: 100%; height: 6px; border-radius: 3px; margin: 12px 0 8px;
-      background: linear-gradient(to right, var(--accent) var(--fill, 15%), #d9e2ea var(--fill, 15%));
-      outline: none;
-    }
-    input[type=range]::-webkit-slider-thumb {
-      -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%;
-      background: #fff; border: 3px solid var(--accent); cursor: pointer;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.25);
-    }
-    input[type=range]::-moz-range-thumb {
-      width: 16px; height: 16px; border-radius: 50%;
-      background: #fff; border: 3px solid var(--accent); cursor: pointer;
-    }
     .chips { display: flex; flex-wrap: wrap; gap: 6px; }
     .chip {
       border: 1px solid var(--line); background: #fff; color: var(--ink);
@@ -90,6 +73,7 @@
     }
     .chip:hover { border-color: var(--accent); color: var(--accent-dark); }
     .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    #presets .chip { flex: 1; padding: 9px 11px; font-size: 13px; font-weight: 600; border-radius: 10px; }
 
     /* CTA */
     #confirm {
@@ -194,10 +178,6 @@
 
     <div class="section">
       <div class="section-label">Radius</div>
-      <div class="radius-head">
-        <span id="radiusValue">300 m</span>
-      </div>
-      <input type="range" id="radiusSlider" min="50" max="2000" step="50" value="300">
       <div class="chips" id="presets"></div>
     </div>
 
@@ -233,7 +213,7 @@
       { name: "Downtown Kitchener", lngLat: [-80.4925, 43.4516] },
       { name: "Conestoga Mall", lngLat: [-80.5215, 43.5002] }
     ];
-    const RADIUS_PRESETS = [100, 300, 500, 1000, 2000];
+    const RADIUS_PRESETS = [100, 300, 500];
 
     // ---------- state ----------
     let center = null;
@@ -322,11 +302,6 @@
     }
 
     function updateRadiusUI() {
-      const slider = $("radiusSlider");
-      const pct = ((radiusMeters - slider.min) / (slider.max - slider.min)) * 100;
-      slider.style.setProperty("--fill", pct + "%");
-      slider.value = radiusMeters;
-      $("radiusValue").textContent = formatRadius(radiusMeters);
       document.querySelectorAll("#presets .chip").forEach((c) =>
         c.classList.toggle("active", Number(c.dataset.r) === radiusMeters));
     }
@@ -399,12 +374,7 @@
       container.classList.toggle("blocked", !ok);
     });
 
-    $("radiusSlider").addEventListener("input", (e) => {
-      radiusMeters = parseInt(e.target.value, 10);
-      refresh();
-    });
-
-    // presets + landmark chips
+    // radius presets + landmark chips
     RADIUS_PRESETS.forEach((r) => {
       const b = document.createElement("button");
       b.className = "chip";
@@ -428,11 +398,11 @@
     }
 
     function confirmSelection() {
-  const selection = getSelection();
-  if (!selection) { toast("Click the map to choose a spot first"); return; }
-  const [lng, lat] = selection.center;
-  window.location.href = `explorer.html?lat=${lat}&lng=${lng}&radius=${selection.radiusMeters}`;
-}
+      const selection = getSelection();
+      if (!selection) { toast("Click the map to choose a spot first"); return; }
+      const [lng, lat] = selection.center;
+      window.location.href = `explorer.html?lat=${lat}&lng=${lng}&radius=${selection.radiusMeters}`;
+    }
 
     $("confirm").addEventListener("click", confirmSelection);
 
