@@ -10,13 +10,6 @@
       width: 6px; height: 6px; border-radius: 50%; background: white;
       box-shadow: 0 0 2px black; pointer-events: none; z-index: 2;
     }
-    #hint {
-      position: absolute; bottom: 16px; left: 16px; z-index: 2;
-      background: rgba(0,0,0,0.6); color: white; padding: 10px 14px;
-      border-radius: 6px; font-size: 12.5px; line-height: 1.5; max-width: 330px;
-      pointer-events: none;
-    }
-    #hint b { color: #ffc46b; font-weight: 600; }
     #backLink {
       position: absolute; top: 12px; left: 12px; z-index: 2;
       background: rgba(0,0,0,0.6); color: white; padding: 6px 12px;
@@ -72,11 +65,6 @@
 </head>
 <body>
   <div id="crosshair"></div>
-  <div id="hint">
-    Click to look around &middot; <b>WASD</b> move &middot; <b>Space/Shift</b> up/down &middot; <b>Esc</b> release mouse<br>
-    While looking: <b>click</b> select &middot; <b>X</b> delete &middot; <b>R</b> replace w/ model &middot; <b>B</b> replace w/ block<br>
-    <b>P</b> place model &middot; <b>N</b> place block &middot; <b>Q/E</b> rotate &middot; <b>[ ]</b> height &middot; <b>Z</b> undo
-  </div>
   <a id="backLink" href="map-picker.html">&larr; Back to picker</a>
 
   <div id="ui">
@@ -101,23 +89,6 @@
     <button id="btnReplaceModel">Replace selected with model <kbd>R</kbd></button>
     <button id="btnPlaceModel">Place model at crosshair <kbd>P</kbd></button>
 
-    <h3>Procedural block</h3>
-    <label>Colour <input type="color" id="blockColor" value="#d9c9b5"></label>
-    <label>Height (m) <input type="number" id="blockHeight" value="24" min="3" step="1"></label>
-    <label>Roof
-      <select id="blockRoof">
-        <option value="flat">Flat</option>
-        <option value="gabled">Gabled</option>
-        <option value="hipped">Hipped</option>
-        <option value="pyramidal">Pyramid</option>
-        <option value="skillion">Skillion (single slope)</option>
-      </select>
-    </label>
-    <label>Size when placed (m) <input type="number" id="blockSize" value="20" min="4" step="1"></label>
-    <label>Glass facade <input type="checkbox" id="blockGlass"></label>
-    <button id="btnReplaceBlock">Replace selected with block <kbd>B</kbd></button>
-    <button id="btnPlaceBlock">Place block at crosshair <kbd>N</kbd></button>
-
     <h3>Layout</h3>
     <div class="row">
       <button id="btnExport" class="secondary">Export</button>
@@ -136,7 +107,7 @@
   <div id="attribution" hidden>
     <a href="https://www.mapbox.com/about/maps/" target="_blank" rel="noopener">&copy; Mapbox</a>
     <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">&copy; OpenStreetMap</a>
-    <a href="https://www.maxar.com/" target="_blank" rel="noopener">&copy; Maxar</a>
+    <a id="maxarLink" href="https://www.maxar.com/" target="_blank" rel="noopener">&copy; Maxar</a>
   </div>
 
   <!-- gitignored; defines: const MAPBOX_TOKEN = "pk...."; -->
@@ -162,7 +133,7 @@
     // =====================================================================
     // 1. Read the selection passed in from the picker
     // =====================================================================
-    console.log("explorer.html v4.1 (clearer roads, more trees, cars painted out)");
+    console.log("explorer.html v5.5 (satellite ground, detailed buildings, sturdier map-data loading)");
     const params = new URLSearchParams(window.location.search);
     let centerLat = parseFloat(params.get("lat"));
     let centerLng = parseFloat(params.get("lng"));
@@ -256,53 +227,17 @@
     scene.add(ground);
 
     // =====================================================================
-    // 3. Procedural textures (windows) - drawn on a canvas, no image files
+    // 3. Materials - no image textures on buildings. Walls, roofs and all building detail are flat vertex colours;
+    //    windows, doors and trim are real geometry (see "Building detail" below).
+    //    (The Mapbox satellite photo is used for the ground only; ?sat=0 turns it off, ?sat=roofs also puts it on roofs.)
     // =====================================================================
-    // One tile covers 4 m wide x 3 m tall (roughly one window bay on one floor).
-    const TILE_W = 4, TILE_H = 3;
-
-    function makeTileTexture(draw) {
-      const canvas = document.createElement("canvas");
-      canvas.width = 128; canvas.height = 96;
-      draw(canvas.getContext("2d"), canvas.width, canvas.height);
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.flipY = false; // wall UVs are in metres with v = -height, so don't flip
-      tex.repeat.set(1 / TILE_W, 1 / TILE_H);
-      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-      return tex;
-    }
-
-    // Wall with a punched window (colour gets multiplied by each building's own colour)
-    const windowTex = makeTileTexture((ctx, w, h) => {
-      ctx.fillStyle = "#f4f1ec"; ctx.fillRect(0, 0, w, h);
-      // sill shadow + window
-      ctx.fillStyle = "#c9c4bc"; ctx.fillRect(30, 22, 68, 54);
-      const g = ctx.createLinearGradient(0, 26, 0, 72);
-      g.addColorStop(0, "#7fa2c4"); g.addColorStop(1, "#3f5a75");
-      ctx.fillStyle = g; ctx.fillRect(34, 26, 60, 46);
-      ctx.fillStyle = "rgba(255,255,255,0.25)"; // reflection streak
-      ctx.beginPath(); ctx.moveTo(34, 26); ctx.lineTo(60, 26); ctx.lineTo(42, 72); ctx.lineTo(34, 72); ctx.fill();
-      ctx.fillStyle = "#e2ddd5"; ctx.fillRect(34, 47, 60, 2); // mullion
-      ctx.fillStyle = "#fbfaf7"; ctx.fillRect(30, 76, 68, 4); // sill
-    });
-
-    // Curtain-wall glass: continuous glazing with a spandrel band per floor
-    const glassTex = makeTileTexture((ctx, w, h) => {
-      const g = ctx.createLinearGradient(0, 0, 0, h);
-      g.addColorStop(0, "#b9d6ea"); g.addColorStop(0.8, "#7ea6c6");
-      ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
-      ctx.fillStyle = "#59707f"; ctx.fillRect(0, 78, w, 18);   // spandrel
-      ctx.fillStyle = "#3c4a55"; ctx.fillRect(0, 0, 3, h);      // mullion
-      ctx.fillStyle = "rgba(255,255,255,0.18)";
-      ctx.beginPath(); ctx.moveTo(10, 0); ctx.lineTo(50, 0); ctx.lineTo(20, 78); ctx.lineTo(0, 78); ctx.fill();
-    });
-
-    // roofMat starts vertex-coloured; loadSatellite() switches it to the imagery when that arrives.
-    const roofMat  = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, side: THREE.DoubleSide });
-    const wallMat  = new THREE.MeshStandardMaterial({ vertexColors: true, map: windowTex, roughness: 0.9, side: THREE.DoubleSide });
-    const glassMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: glassTex, roughness: 0.25, metalness: 0.1, side: THREE.DoubleSide });
+    const roofMat   = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, side: THREE.DoubleSide });
+    const wallMat   = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, side: THREE.DoubleSide });
+    const glassMat  = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.1, side: THREE.DoubleSide });
+    const detailMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: THREE.DoubleSide,
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+    const windowMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.14, metalness: 0.3, side: THREE.DoubleSide,
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
 
     // =====================================================================
     // 4. Coordinate helpers
@@ -326,29 +261,71 @@
       return Number.isFinite(n) ? n : fallback;
     }
 
-    // Public Overpass servers are often busy, so try a few in turn.
+    // Public Overpass servers are often busy (504 / timeouts), so: several mirrors, one retry round, a 30 s timeout
+    // per try, and the last good answer is cached in this browser so a busy server can't blank the map.
+    // (Add ?refresh=1 to the URL to ignore the cache.)
     const OVERPASS_URLS = [
       "https://overpass-api.de/api/interpreter",
       "https://overpass.kumi.systems/api/interpreter",
-      "https://overpass.private.coffee/api/interpreter"
+      "https://overpass.private.coffee/api/interpreter",
+      "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+      "https://overpass.openstreetmap.fr/api/interpreter"
     ];
+    const overpassKey = (q) => {
+      let h = 5381;
+      for (let i = 0; i < q.length; i++) h = ((h << 5) + h + q.charCodeAt(i)) | 0;
+      return "waypoint:overpass:" + (h >>> 0).toString(36);
+    };
+    const skipOverpassCache = new URLSearchParams(location.search).get("refresh") === "1";
+    const overpassCooldown = {};   // mirror url -> timestamp before which we don't call it again
 
     async function fetchOverpass(query) {
-      let lastError;
-      for (const url of OVERPASS_URLS) {
+      const key = overpassKey(query);
+      if (!skipOverpassCache) {
         try {
-          const res = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: "data=" + encodeURIComponent(query)
-          });
-          if (!res.ok) throw new Error("HTTP " + res.status);
-          return JSON.parse(await res.text()); // throws if the server sent an error page
-        } catch (err) {
-          console.warn("Overpass failed at", url, err);
-          lastError = err;
+          const cached = localStorage.getItem(key);
+          if (cached) { console.log("Overpass: using the cached answer for this area (?refresh=1 to reload)"); return JSON.parse(cached); }
+        } catch (e) { /* storage blocked or corrupt - just fetch */ }
+      }
+      let lastError;
+      for (let round = 0; round < 3; round++) {
+        let tried = 0;
+        for (const url of OVERPASS_URLS) {
+          // a mirror that just rate-limited us (429) or timed out is left alone for a while instead of being hammered
+          if (Date.now() < (overpassCooldown[url] || 0)) continue;
+          tried++;
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 30000);
+          try {
+            const res = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: "data=" + encodeURIComponent(query),
+              signal: ctrl.signal
+            });
+            if (res.status === 429) overpassCooldown[url] = Date.now() + 60000;
+            else if (res.status === 504 || res.status === 503) overpassCooldown[url] = Date.now() + 15000;
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const text = await res.text();
+            const data = JSON.parse(text);   // throws if the server sent an error page
+            if (!data.elements || (!data.elements.length && /error|timed out/i.test(data.remark || ""))) throw new Error(data.remark || "empty answer");
+            try { localStorage.setItem(key, text); } catch (e) { /* too big for storage - fine */ }
+            return data;
+          } catch (err) {
+            console.warn("Overpass failed at", url, err);
+            lastError = err;
+          } finally {
+            clearTimeout(timer);
+          }
+        }
+        if (round < 2) {
+          toast("Map data server is busy - retrying...");
+          // everything cooling down? wait for the soonest mirror; otherwise a short pause
+          const soonest = Math.min(...OVERPASS_URLS.map((u) => overpassCooldown[u] || 0)) - Date.now();
+          await new Promise((r) => setTimeout(r, tried ? 4000 : Math.min(Math.max(soonest, 2000), 20000)));
         }
       }
+      toast("Couldn't load map data (servers busy). Reload in a minute.");
       throw lastError;
     }
 
@@ -481,7 +458,7 @@
       terrainInnerMat.color.set(0xffffff);
       terrainInnerMat.needsUpdate = true;
     }
-    function showAttribution() { $("attribution").hidden = false; }
+    function showAttribution() { $("attribution").hidden = false; $("maxarLink").hidden = !satelliteReady; }
 
     function updateTerrainMesh() {
       const pos = terrainGeo.attributes.position, h = terrain.heights;
@@ -583,6 +560,7 @@
 
     // Everything that depends on ground height gets rebuilt when the heights arrive.
     function onTerrainReady() {
+      terrainStamp++;
       rebuildBuildings();
       rebuildPlacements();
       buildEnvironment3D();
@@ -596,7 +574,9 @@
     //     Loaded asynchronously; until it arrives (or if it fails) the OSM-painted ground and
     //     vertex-coloured roofs stay exactly as they were.
     // =====================================================================
-    const USE_SATELLITE = true;
+    const SAT_MODE = new URLSearchParams(location.search).get("sat");   // ?sat=0 off, ?sat=roofs also puts the photo on roofs
+    const USE_SATELLITE = SAT_MODE !== "0";     // satellite photo on the ground (roads/parking painted over it)
+    const SAT_ROOFS = SAT_MODE === "roofs";     // roofs stay flat colour unless asked for
 
     // [minLon, minLat, maxLon, maxLat] of the square (2*radius on a side) around the picked centre
     function satelliteBBox() {
@@ -624,9 +604,11 @@
           satImage = tex.image;
           setGroundTexture(tex);        // drapes over the terrain's middle square
           if (envParsed) paintGroundTexture();   // OSM already here: repaint roads/parking over the photo (hides cars)
-          roofMat.map = tex;            // roof UVs are already world-projected in rebuildBuildings()
-          roofMat.vertexColors = false; // otherwise the imagery is multiplied by the flat roof colour
-          roofMat.needsUpdate = true;
+          if (SAT_ROOFS) {
+            roofMat.map = tex;            // roof UVs are already world-projected in rebuildBuildings()
+            roofMat.vertexColors = false; // otherwise the imagery is multiplied by the flat roof colour
+            roofMat.needsUpdate = true;
+          }
           showAttribution();
           console.log("Satellite imagery loaded");
         },
@@ -724,8 +706,9 @@
 
     // ---- flat-shaded triangle soup builder (position/normal/uv/colour, non-indexed like ExtrudeGeometry) ----
     class MeshBuilder {
-      constructor() { this.pos = []; this.nor = []; this.uv = []; }
-      tri(a, b, c, { up = false, wall = false } = {}) {
+      constructor() { this.pos = []; this.nor = []; this.uv = []; this.col = []; this.cur = [1, 1, 1]; }
+      setColor(c) { this.cur = [c.r, c.g, c.b]; }
+      tri(a, b, c, { up = false, wall = false, dir = null } = {}) {
         const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
         const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
         let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
@@ -733,22 +716,24 @@
         if (len < 1e-6) return;                 // degenerate (e.g. a hip roof on a square)
         nx /= len; ny /= len; nz /= len;
         if (up && ny < 0) { const t = b; b = c; c = t; nx = -nx; ny = -ny; nz = -nz; }   // roof faces up
+        if (dir && nx * dir[0] + ny * dir[1] + nz * dir[2] < 0) { const t = b; b = c; c = t; nx = -nx; ny = -ny; nz = -nz; }   // face the given way
         let dx = b[0] - a[0], dz = b[2] - a[2], dl = Math.hypot(dx, dz);
         if (dl < 1e-6) { dx = c[0] - a[0]; dz = c[2] - a[2]; dl = Math.hypot(dx, dz) || 1; }
         dx /= dl; dz /= dl;
         for (const p of [a, b, c]) {
           this.pos.push(p[0], p[1], p[2]);
           this.nor.push(nx, ny, nz);
+          this.col.push(this.cur[0], this.cur[1], this.cur[2]);
           if (wall) this.uv.push((p[0] - a[0]) * dx + (p[2] - a[2]) * dz, 1 - (p[1] - a[1]));   // metres, like wall UVs
           else this.uv.push(0, 0);              // roofs get world-projected UVs afterwards
         }
       }
       quad(a, b, c, d, opts) { this.tri(a, b, c, opts); this.tri(a, c, d, opts); }
-      toGeometry(color) {
+      toGeometry(color) {   // with a colour: one flat colour; without: the per-vertex colours set via setColor()
         if (!this.pos.length) return null;
         const g = new THREE.BufferGeometry();
-        const n = this.pos.length / 3, col = new Float32Array(n * 3);
-        for (let i = 0; i < n; i++) { col[i * 3] = color.r; col[i * 3 + 1] = color.g; col[i * 3 + 2] = color.b; }
+        const n = this.pos.length / 3, col = color ? new Float32Array(n * 3) : new Float32Array(this.col);
+        if (color) for (let i = 0; i < n; i++) { col[i * 3] = color.r; col[i * 3 + 1] = color.g; col[i * 3 + 2] = color.b; }
         g.setAttribute("position", new THREE.Float32BufferAttribute(this.pos, 3));
         g.setAttribute("normal", new THREE.Float32BufferAttribute(this.nor, 3));
         g.setAttribute("uv", new THREE.Float32BufferAttribute(this.uv, 2));
@@ -893,8 +878,9 @@
       return out;
     }
 
-    // Everything one building contributes: wall pieces and roof pieces (all world-space, vertex-coloured)
-    function buildingParts(b) {
+    // Everything one building contributes: wall pieces, roof pieces and (tier >= 1) window/detail geometry.
+    // All world-space and vertex-coloured. `ctx` = { tier, neighbors }.
+    function buildingParts(b, ctx = { tier: 0, neighbors: null }) {
       const ring = cleanRing(b.footprint);
       if (ring.length < 3) return null;
       const ringW = ring.map(([x, n]) => [x, -n]);
@@ -903,13 +889,15 @@
       const bottom = base + minH - (minH === 0 ? SKIRT : 0);   // sink the walls so slopes never show a gap
       const eaveY = base + b.height;
       const wallColor = new THREE.Color(b.wallColor), roofColor = new THREE.Color(b.roofColor);
-      const out = { walls: [], roofs: [], glass: !!b.glass };
+      // glass buildings: with real glazing in front, the wall itself is the dark spandrel between the windows
+      const shellColor = b.glass && ctx.tier >= 1 ? wallColor.clone().multiplyScalar(0.5) : wallColor;
+      const out = { walls: [], roofs: [], glass: !!b.glass, detail: null, windows: null };
 
       const ext = extrudeRing(ring, eaveY - bottom, bottom);
-      for (const g of ext.groups) if (g.materialIndex === 1) out.walls.push(sliceGeometry(ext, g.start, g.count, wallColor));
+      for (const g of ext.groups) if (g.materialIndex === 1) out.walls.push(sliceGeometry(ext, g.start, g.count, shellColor));
 
       let pitched = null;
-      if (b.roof && b.roof.shape && b.roof.shape !== "flat") pitched = buildRoofGeometry(ringW, eaveY, b.roof, roofColor, wallColor);
+      if (b.roof && b.roof.shape && b.roof.shape !== "flat") pitched = buildRoofGeometry(ringW, eaveY, b.roof, roofColor, shellColor);
 
       if (pitched && pitched.roof) {
         out.roofs.push(pitched.roof);
@@ -925,7 +913,422 @@
         }
       }
       ext.dispose();
+
+      if (ctx.tier >= 1 && ctx.neighbors) {
+        const d = buildDetail(b, { ringW, base, eaveY, wallColor, roofColor, tier: ctx.tier, neighbors: ctx.neighbors });
+        out.detail = d.detail; out.windows = d.windows;
+      }
       return out;
+    }
+
+    // =====================================================================
+    // 5b. Building detail - all real geometry, no textures: windows (frames, reveals, sills, lintels),
+    //     doors + steps + canopies, base bands, cornices, string courses, corner posts, balconies, shop awnings,
+    //     chimneys, rooftop units, stair bulkheads and antennas.
+    //     Detail is built per building and cached. How much a building gets (its "tier") comes from a
+    //     triangle budget, nearest buildings first:  2 = everything,  1 = glass + sills only,  0 = none.
+    //     ?detail=low|high|off in the URL scales the budget.
+    // =====================================================================
+    const DETAIL_PARAM = (new URLSearchParams(location.search).get("detail") || "").toLowerCase();
+    // Default is now "light": the nearest ~1/6 of the old budget gets windows/doors/trim, the rest stays plain.
+    //   ?detail=off (none) | low (tiny) | (default) | high (the previous default) | max
+    const DETAIL_BUDGET = 800000 * ({ off: 0, low: 0.06, high: 1, max: 2.5 }[DETAIL_PARAM] ?? 0.16);
+
+    const hash01 = (id, salt = 0) => {
+      let h = (2166136261 ^ Math.imul(salt + 1, 16777619)) >>> 0;
+      const s = String(id);
+      for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+      h ^= h >>> 13; h = Math.imul(h, 0x5bd1e995) >>> 0; h ^= h >>> 15;
+      return (h >>> 0) / 4294967296;
+    };
+
+    const NO_WINDOW_KINDS = new Set(["industrial", "warehouse", "garage", "garages", "carport", "roof", "service", "shed",
+      "hut", "static_caravan", "greenhouse", "storage_tank", "barn", "transformer_tower", "kiosk"]);
+    const GARAGE_KINDS = new Set(["garage", "garages", "carport"]);
+    const RETAIL_KINDS = new Set(["retail", "commercial", "supermarket"]);
+    const APARTMENT_KINDS = new Set(["apartments", "dormitory", "residential"]);
+    const BIG_ENTRANCE_KINDS = new Set(["retail", "commercial", "supermarket", "office", "school", "university", "college",
+      "hospital", "civic", "public", "government", "hotel", "church", "cathedral", "apartments", "dormitory"]);
+    const AWNING_COLORS = [0x9b2d30, 0x2f5d50, 0x27406b, 0xb58a3b, 0x5a3d6b, 0x3b3b3b];
+    const DOOR_COLORS = [0x5a3a2a, 0x2f4a3a, 0x3a3f57, 0x7a2a2a, 0x2b2b2b, 0x6b5a2a];
+
+    const _white = new THREE.Color(0xffffff);
+    const tint = (c, k) => (k >= 1 ? c.clone().lerp(_white, Math.min(k - 1, 1)) : c.clone().multiplyScalar(k));
+
+    // Outward-facing edge frame: origin a, unit tangent t, outward normal n (CCW ring in the (x, z) plane -> n = (tz, -tx))
+    function edgeFrame(a, b, sign) {
+      const dx = b[0] - a[0], dz = b[1] - a[1], len = Math.hypot(dx, dz) || 1e-6;
+      const tx = dx / len, tz = dz / len;
+      return { ax: a[0], az: a[1], len, tx, tz, nx: tz * sign, nz: -tx * sign };
+    }
+    const EP = (f, s, off, y) => [f.ax + f.tx * s + f.nx * off, y, f.az + f.tz * s + f.nz * off];
+    // vertical rectangle on the wall plane (offset `off` outward), facing outward
+    const fq = (mb, f, s0, s1, off, y0, y1) =>
+      mb.quad(EP(f, s0, off, y0), EP(f, s1, off, y0), EP(f, s1, off, y1), EP(f, s0, off, y1), { dir: [f.nx, 0, f.nz] });
+    // a box stuck to the wall: front + top (+ bottom) + both ends
+    function fbox(mb, f, s0, s1, o0, o1, y0, y1, bottom = false) {
+      const n = [f.nx, 0, f.nz], t = [f.tx, 0, f.tz], mt = [-f.tx, 0, -f.tz];
+      mb.quad(EP(f, s0, o1, y0), EP(f, s1, o1, y0), EP(f, s1, o1, y1), EP(f, s0, o1, y1), { dir: n });
+      mb.quad(EP(f, s0, o0, y1), EP(f, s0, o1, y1), EP(f, s1, o1, y1), EP(f, s1, o0, y1), { dir: [0, 1, 0] });
+      mb.quad(EP(f, s0, o0, y0), EP(f, s0, o1, y0), EP(f, s0, o1, y1), EP(f, s0, o0, y1), { dir: mt });
+      mb.quad(EP(f, s1, o0, y0), EP(f, s1, o1, y0), EP(f, s1, o1, y1), EP(f, s1, o0, y1), { dir: t });
+      if (bottom) mb.quad(EP(f, s0, o0, y0), EP(f, s1, o0, y0), EP(f, s1, o1, y0), EP(f, s0, o1, y0), { dir: [0, -1, 0] });
+    }
+    // free-standing box (4 sides + top [+ bottom]) centred at (cx, cz), axis u = (ux, uz)
+    function abox(mb, cx, cz, ux, uz, hx, hz, y0, y1, bottom = false) {
+      const vx = -uz, vz = ux;
+      const C = (a, b, y) => [cx + ux * a * hx + vx * b * hz, y, cz + uz * a * hx + vz * b * hz];
+      mb.quad(C(1, -1, y0), C(1, 1, y0), C(1, 1, y1), C(1, -1, y1), { dir: [ux, 0, uz] });
+      mb.quad(C(-1, 1, y0), C(-1, -1, y0), C(-1, -1, y1), C(-1, 1, y1), { dir: [-ux, 0, -uz] });
+      mb.quad(C(1, 1, y0), C(-1, 1, y0), C(-1, 1, y1), C(1, 1, y1), { dir: [vx, 0, vz] });
+      mb.quad(C(-1, -1, y0), C(1, -1, y0), C(1, -1, y1), C(-1, -1, y1), { dir: [-vx, 0, -vz] });
+      mb.quad(C(-1, -1, y1), C(1, -1, y1), C(1, 1, y1), C(-1, 1, y1), { dir: [0, 1, 0] });
+      if (bottom) mb.quad(C(-1, -1, y0), C(1, -1, y0), C(1, 1, y0), C(-1, 1, y0), { dir: [0, -1, 0] });
+    }
+
+    // A punched window: glass, frame ring, inner reveal, mullion/transom, sill, lintel.
+    function addWindow(D, f, s, y0, w, h, tier, palette) {
+      const s0 = s - w / 2, s1 = s + w / 2, y1 = y0 + h;
+      D.glass.setColor(palette.glass);
+      fq(D.glass, f, s0, s1, 0.05, y0, y1);
+      const T = D.detail;
+      if (tier < 2) {   // light: just a sill under the glass
+        T.setColor(palette.trim);
+        fbox(T, f, s0 - 0.05, s1 + 0.05, 0, 0.1, y0 - 0.07, y0);
+        return;
+      }
+      const ft = 0.07, off = 0.11, t = [f.tx, 0, f.tz], mt = [-f.tx, 0, -f.tz];
+      T.setColor(palette.frame);
+      fq(T, f, s0 - ft, s1 + ft, off, y0 - ft, y0);
+      fq(T, f, s0 - ft, s1 + ft, off, y1, y1 + ft);
+      fq(T, f, s0 - ft, s0, off, y0, y1);
+      fq(T, f, s1, s1 + ft, off, y0, y1);
+      // reveal: the four inner faces between the glass plane and the frame face
+      T.quad(EP(f, s0, 0.05, y0), EP(f, s0, off, y0), EP(f, s0, off, y1), EP(f, s0, 0.05, y1), { dir: t });
+      T.quad(EP(f, s1, 0.05, y0), EP(f, s1, off, y0), EP(f, s1, off, y1), EP(f, s1, 0.05, y1), { dir: mt });
+      T.quad(EP(f, s0, 0.05, y0), EP(f, s1, 0.05, y0), EP(f, s1, off, y0), EP(f, s0, off, y0), { dir: [0, 1, 0] });
+      T.quad(EP(f, s0, 0.05, y1), EP(f, s1, 0.05, y1), EP(f, s1, off, y1), EP(f, s0, off, y1), { dir: [0, -1, 0] });
+      if (w >= 1.3) fq(T, f, s - 0.03, s + 0.03, off + 0.005, y0, y1);
+      if (h >= 1.4) fq(T, f, s0, s1, off + 0.005, y0 + h * 0.62 - 0.03, y0 + h * 0.62 + 0.03);
+      T.setColor(palette.trim);
+      fbox(T, f, s0 - 0.1, s1 + 0.1, 0, 0.17, y0 - 0.1, y0 - ft, true);            // sill
+      fbox(T, f, s0 - 0.07, s1 + 0.07, 0, 0.09, y1 + ft, y1 + ft + 0.1);            // lintel
+    }
+
+    // Spatial index of footprints, used to skip windows on walls shared with a neighbouring building.
+    function makeNeighborIndex(items) {   // items: [{ id, ringW }]
+      const CELL = 24, cells = new Map(), key = (i, j) => i * 100003 + j;
+      const info = new Map();
+      for (const it of items) {
+        let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+        for (const [x, z] of it.ringW) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+        const e = { id: it.id, ringW: it.ringW, x0, x1, z0, z1 };
+        info.set(it.id, e);
+        for (let i = Math.floor(x0 / CELL); i <= Math.floor(x1 / CELL); i++)
+          for (let j = Math.floor(z0 / CELL); j <= Math.floor(z1 / CELL); j++) {
+            const k = key(i, j);
+            if (!cells.has(k)) cells.set(k, []);
+            cells.get(k).push(e);
+          }
+      }
+      return {
+        covered(x, z, selfId) {
+          const list = cells.get(key(Math.floor(x / CELL), Math.floor(z / CELL)));
+          if (!list) return false;
+          for (const e of list) if (e.id !== selfId && x >= e.x0 && x <= e.x1 && z >= e.z0 && z <= e.z1 && pointInRing(x, z, e.ringW)) return true;
+          return false;
+        },
+        signature(id) {   // ids of buildings whose bounding boxes touch this one (part of the cache key)
+          const me = info.get(id);
+          if (!me) return "";
+          const out = new Set();
+          for (let i = Math.floor((me.x0 - 1) / CELL); i <= Math.floor((me.x1 + 1) / CELL); i++)
+            for (let j = Math.floor((me.z0 - 1) / CELL); j <= Math.floor((me.z1 + 1) / CELL); j++)
+              for (const e of cells.get(key(i, j)) || [])
+                if (e.id !== id && e.x1 >= me.x0 - 1 && e.x0 <= me.x1 + 1 && e.z1 >= me.z0 - 1 && e.z0 <= me.z1 + 1) out.add(e.id);
+          return [...out].sort().join(",");
+        }
+      };
+    }
+
+    // storeys and per-kind window layout shared by the estimator and the builder
+    function detailLayout(b) {
+      const kind = b.kind || "yes";
+      const minH = b.minHeight || 0;
+      const floors = Math.max(1, Math.round((b.height - minH) / 3.1));
+      const fh = Math.min(Math.max((b.height - minH) / floors, 2.6), 5);
+      const house = HOUSE_TYPES.has(kind) && !APARTMENT_KINDS.has(kind) || kind === "terrace";
+      const bay = house ? 3.2 : 3.4;
+      return { kind, minH, floors, fh, house, bay, noWindows: NO_WINDOW_KINDS.has(kind) };
+    }
+
+    // rough triangle cost, used to hand out tiers under the budget
+    function estimateDetail(ringW, b, tier) {
+      const L = detailLayout(b);
+      let tris = 60, edges = 0;
+      for (let i = 0; i < ringW.length; i++) {
+        const a = ringW[i], c = ringW[(i + 1) % ringW.length], len = Math.hypot(c[0] - a[0], c[1] - a[1]);
+        if (len < 1.5) continue;
+        edges++;
+        if (L.noWindows) continue;
+        const nb = b.glass ? Math.floor(len / 1.5) : Math.max(0, Math.floor((len - 1.8) / L.bay));
+        tris += nb * L.floors * (tier === 2 ? (b.glass ? 6 : 32) : (b.glass ? 2 : 6)) + (tier === 2 ? 30 : 0) + L.floors * (b.glass ? 2 : 0);
+      }
+      return tris + (tier === 2 ? edges * (12 + L.floors * 4) + 250 : 0);
+    }
+
+    // Everything one building gets: returns { detail, windows } geometries (world space, vertex-coloured), or nulls.
+    function buildDetail(b, c) {
+      const { ringW, base, eaveY, wallColor, roofColor, tier, neighbors } = c;
+      if (tier < 1) return { detail: null, windows: null };
+      const L = detailLayout(b), sign = signedArea(ringW) > 0 ? 1 : -1;
+      const id = b.id, n = ringW.length;
+      const yBase = base + L.minH;
+      const r = (salt) => hash01(id, salt);
+
+      const D = { detail: new MeshBuilder(), glass: new MeshBuilder() };
+      const glassCol = new THREE.Color().setHSL(0.57 + r(1) * 0.05, 0.32, 0.26 + r(2) * 0.1);
+      const palette = {
+        glass: b.glass ? new THREE.Color().setHSL(0.56 + r(1) * 0.04, 0.4, 0.42 + r(2) * 0.1) : glassCol,
+        frame: L.house || wallColor.getHSL({ h: 0, s: 0, l: 0 }).l > 0.72 && !b.glass && r(3) < 0.5 ? new THREE.Color(0xf1eee7) : new THREE.Color(0x3c4046),
+        trim: tint(wallColor, 1.28)
+      };
+      const plinth = L.house ? new THREE.Color(0x8d8983) : tint(wallColor, 0.78);
+      const T = D.detail;
+
+      // ---- per-edge frames ----
+      const edges = [];
+      for (let i = 0; i < n; i++) {
+        const f = edgeFrame(ringW[i], ringW[(i + 1) % n], sign);
+        if (f.len < 1.5) { edges.push(null); continue; }
+        const mx = f.ax + f.tx * f.len / 2 + f.nx * 0.6, mz = f.az + f.tz * f.len / 2 + f.nz * 0.6;
+        f.covered = neighbors.covered(mx, mz, id);
+        edges.push(f);
+      }
+      // entrance edge = the longest uncovered edge
+      let doorEdge = -1, best = 0;
+      edges.forEach((f, i) => { if (f && !f.covered && f.len > best && f.len >= 3) { best = f.len; doorEdge = i; } });
+
+      // ---- door (decided first so windows can avoid it) ----
+      let door = null;
+      if (tier === 2 && doorEdge >= 0 && L.minH === 0 && b.height >= 2.6) {
+        const f = edges[doorEdge];
+        const big = BIG_ENTRANCE_KINDS.has(L.kind) || polyArea(ringW) > 350 || L.floors >= 3;
+        const garage = GARAGE_KINDS.has(L.kind), dock = L.kind === "industrial" || L.kind === "warehouse";
+        const w = garage ? 2.6 : dock ? 3.2 : big ? 2.4 : 1.0;
+        const h = garage ? 2.2 : dock ? 3.0 : big ? 2.5 : 2.05;
+        const s = Math.min(Math.max(L.house && !garage ? f.len * 0.3 : f.len * 0.5, w / 2 + 0.7), f.len - w / 2 - 0.7);
+        const gx = f.ax + f.tx * s + f.nx * 0.05, gz = f.az + f.tz * s + f.nz * 0.05;
+        const y0 = Math.max(elevationAt(gx, gz), base - 0.2);
+        if (s > w / 2 + 0.3 && y0 + h < eaveY - 0.3) {
+          door = { edge: doorEdge, s0: s - w / 2 - 0.6, s1: s + w / 2 + 0.6 };
+          const doorCol = new THREE.Color(DOOR_COLORS[Math.floor(r(4) * DOOR_COLORS.length)]);
+          if (big && !garage && !dock) {   // glass double door
+            D.glass.setColor(palette.glass);
+            fq(D.glass, f, s - w / 2, s + w / 2, 0.05, y0, y0 + h);
+            T.setColor(palette.frame);
+            fq(T, f, s - w / 2 - 0.1, s - w / 2, 0.09, y0, y0 + h + 0.1);
+            fq(T, f, s + w / 2, s + w / 2 + 0.1, 0.09, y0, y0 + h + 0.1);
+            fq(T, f, s - w / 2, s + w / 2, 0.09, y0 + h, y0 + h + 0.1);
+            fq(T, f, s - 0.04, s + 0.04, 0.09, y0, y0 + h);
+            fq(T, f, s - w / 2, s + w / 2, 0.09, y0 + h * 0.45, y0 + h * 0.45 + 0.05);   // push bar
+            // canopy on two posts
+            const awn = new THREE.Color(AWNING_COLORS[Math.floor(r(5) * AWNING_COLORS.length)]);
+            T.setColor(tint(awn, 0.9));
+            fbox(T, f, s - w / 2 - 0.5, s + w / 2 + 0.5, 0, 1.5, y0 + h + 0.3, y0 + h + 0.42, true);
+            T.setColor(new THREE.Color(0x55595e));
+            for (const sx of [-1, 1]) {
+              const px = f.ax + f.tx * (s + sx * (w / 2 + 0.4)) + f.nx * 1.35, pz = f.az + f.tz * (s + sx * (w / 2 + 0.4)) + f.nz * 1.35;
+              abox(T, px, pz, f.tx, f.tz, 0.05, 0.05, y0, y0 + h + 0.3);
+            }
+            // steps
+            T.setColor(new THREE.Color(0xa7a49d));
+            fbox(T, f, s - w / 2 - 0.5, s + w / 2 + 0.5, 0, 0.9, y0 - 0.02, y0 + 0.14);
+            fbox(T, f, s - w / 2 - 0.9, s + w / 2 + 0.9, 0, 1.4, y0 - 0.02, y0 + 0.07);
+          } else {
+            T.setColor(doorCol);
+            fq(T, f, s - w / 2, s + w / 2, 0.06, y0, y0 + h);
+            if (garage || dock) {   // roll-up door panel lines
+              T.setColor(tint(doorCol, 1.15));
+              for (let k = 1; k <= 5; k++) fq(T, f, s - w / 2, s + w / 2, 0.075, y0 + (h * k) / 6 - 0.02, y0 + (h * k) / 6 + 0.02);
+            } else {
+              T.setColor(new THREE.Color(0xd9b45a));
+              fq(T, f, s + w / 2 - 0.2, s + w / 2 - 0.13, 0.08, y0 + 0.95, y0 + 1.05);   // handle
+            }
+            T.setColor(palette.trim);
+            fq(T, f, s - w / 2 - 0.09, s - w / 2, 0.09, y0, y0 + h + 0.09);
+            fq(T, f, s + w / 2, s + w / 2 + 0.09, 0.09, y0, y0 + h + 0.09);
+            fq(T, f, s - w / 2 - 0.09, s + w / 2 + 0.09, 0.09, y0 + h, y0 + h + 0.09);
+            if (!garage && !dock) {
+              T.setColor(new THREE.Color(0xa7a49d));
+              fbox(T, f, s - w / 2 - 0.3, s + w / 2 + 0.3, 0, 0.55, y0 - 0.02, y0 + 0.15);
+              fbox(T, f, s - w / 2 - 0.3, s + w / 2 + 0.3, 0.55, 0.95, y0 - 0.02, y0 + 0.08);
+              if (L.kind === "terrace" || L.kind === "apartments") {   // small hood over the door
+                T.setColor(tint(wallColor, 0.7));
+                fbox(T, f, s - w / 2 - 0.4, s + w / 2 + 0.4, 0, 1.0, y0 + h + 0.2, y0 + h + 0.3, true);
+              }
+            }
+          }
+          // shop awning across the front of retail buildings
+          if (RETAIL_KINDS.has(L.kind) && f.len >= 6) {
+            const awn = new THREE.Color(AWNING_COLORS[Math.floor(r(6) * AWNING_COLORS.length)]);
+            T.setColor(awn);
+            const a0 = 0.6, a1 = f.len - 0.6, ya = y0 + 2.9;
+            T.quad(EP(f, a0, 0, ya + 0.2), EP(f, a1, 0, ya + 0.2), EP(f, a1, 1.0, ya - 0.1), EP(f, a0, 1.0, ya - 0.1), { dir: [f.nx * 0.5, 0.85, f.nz * 0.5] });
+            T.tri(EP(f, a0, 0, ya + 0.2), EP(f, a0, 1.0, ya - 0.1), EP(f, a0, 0, ya - 0.1), { dir: [-f.tx, 0, -f.tz] });
+            T.tri(EP(f, a1, 0, ya + 0.2), EP(f, a1, 0, ya - 0.1), EP(f, a1, 1.0, ya - 0.1), { dir: [f.tx, 0, f.tz] });
+            fq(T, f, a0, a1, 1.0, ya - 0.2, ya - 0.1);   // valance
+          }
+        }
+      }
+
+      // ---- walls: bands, windows, ribbons ----
+      const balconies = [];
+      edges.forEach((f, ei) => {
+        if (!f || f.covered) return;
+        const wallTop = eaveY;
+        if (L.minH === 0) { T.setColor(plinth); fbox(T, f, 0, f.len, 0, 0.07, base - 0.35, base + 0.55); }
+        if (tier === 2 && !(b.roof && b.roof.shape && b.roof.shape !== "flat") && !L.house) {   // cornice under a flat roof
+          T.setColor(palette.trim);
+          fbox(T, f, -0.05, f.len + 0.05, 0, 0.22, wallTop - 0.34, wallTop, true);
+        }
+        if (tier === 2 && !L.house && !b.glass && L.floors >= 3) {       // string courses
+          T.setColor(tint(wallColor, 1.15));
+          for (let k = 1; k < L.floors; k++) fbox(T, f, 0, f.len, 0, 0.07, yBase + k * L.fh - 0.07, yBase + k * L.fh + 0.07);
+        }
+
+        if (b.glass) {
+          // curtain wall: one glass ribbon per storey with mullions, dark spandrel = the wall colour underneath
+          if (f.len < 3) return;
+          D.glass.setColor(palette.glass);
+          for (let k = 0; k < L.floors; k++) {
+            const yb = yBase + k * L.fh + L.fh * 0.3, yt = yBase + k * L.fh + L.fh * 0.92;
+            fq(D.glass, f, 0.25, f.len - 0.25, 0.06, yb, yt);
+          }
+          if (tier === 2) {
+            T.setColor(new THREE.Color(0x31363b));
+            const nm = Math.max(1, Math.floor(f.len / 1.5));
+            for (let m = 0; m <= nm; m++) {
+              const s = 0.25 + ((f.len - 0.5) * m) / nm;
+              fbox(T, f, s - 0.04, s + 0.04, 0.04, 0.12, yBase, eaveY - 0.15);
+            }
+            T.setColor(new THREE.Color(0x454b52));
+            for (let k = 0; k <= L.floors; k++) fbox(T, f, 0, f.len, 0, 0.16, yBase + k * L.fh - 0.08, yBase + k * L.fh + 0.08);
+          }
+          return;
+        }
+        if (L.noWindows) return;
+
+        const margin = 0.9, usable = f.len - 2 * margin, nb = Math.floor(usable / L.bay);
+        if (nb < 1) return;
+        const step = usable / nb;
+        const shop = RETAIL_KINDS.has(L.kind);
+        for (let k = 0; k < L.floors; k++) {
+          const ground = k === 0;
+          const w = shop && ground ? Math.min(step * 0.78, 3.2) : L.house ? Math.min(1.15, step * 0.5) : Math.min(1.6, step * 0.5);
+          const h = shop && ground ? Math.min(2.1, L.fh * 0.7) : L.house ? Math.min(1.3, L.fh * 0.48) : Math.min(1.65, L.fh * 0.52);
+          const sill = shop && ground ? 0.5 : (L.fh - h) * 0.5;
+          const y0 = yBase + k * L.fh + sill;
+          if (y0 + h > eaveY - 0.2) continue;
+          for (let m = 0; m < nb; m++) {
+            const s = margin + step * (m + 0.5);
+            if (door && door.edge === ei && ground && s + w / 2 > door.s0 && s - w / 2 < door.s1) continue;
+            if (ground) {   // don't bury windows on the uphill side of a slope
+              const gx = f.ax + f.tx * s + f.nx * 0.05, gz = f.az + f.tz * s + f.nz * 0.05;
+              if (elevationAt(gx, gz) > y0 - 0.15) continue;
+            }
+            addWindow(D, f, s, y0, w, h, tier, palette);
+            if (tier === 2 && k >= 1 && APARTMENT_KINDS.has(L.kind) && L.floors >= 3 && m % 2 === 1 && balconies.length < 48) balconies.push([f, s, yBase + k * L.fh, step]);
+          }
+        }
+      });
+
+      // ---- balconies (apartments) ----
+      for (const [f, s, yf, step] of balconies) {
+        const hw = Math.min(step * 0.36, 1.1);
+        T.setColor(tint(wallColor, 1.12));
+        fbox(T, f, s - hw, s + hw, 0, 1.15, yf, yf + 0.14, true);
+        T.setColor(new THREE.Color(0x9aa0a6));
+        fbox(T, f, s - hw, s + hw, 1.08, 1.14, yf + 0.14, yf + 1.02);         // front rail panel
+        fbox(T, f, s - hw, s - hw + 0.05, 0, 1.14, yf + 0.14, yf + 1.02);     // side rails
+        fbox(T, f, s + hw - 0.05, s + hw, 0, 1.14, yf + 0.14, yf + 1.02);
+      }
+
+      // ---- corner posts ----
+      if (tier === 2 && !b.glass && (L.house || polyArea(ringW) < 700) && b.height < 16) {
+        for (let i = 0; i < n; i++) {
+          const fp = edges[(i - 1 + n) % n], fn = edges[i];
+          if (!fp || !fn || fp.covered || fn.covered) continue;
+          if (Math.abs(fp.tx * fn.tx + fp.tz * fn.tz) > 0.3) continue;   // only roughly right-angle corners
+          const bx = fp.nx + fn.nx, bz = fp.nz + fn.nz, bl = Math.hypot(bx, bz) || 1;
+          T.setColor(palette.trim);
+          abox(T, fn.ax + (bx / bl) * 0.05, fn.az + (bz / bl) * 0.05, fn.tx, fn.tz, 0.13, 0.13, base - 0.1, eaveY + 0.05);
+        }
+      }
+
+      // ---- roof details ----
+      const area = polyArea(ringW);
+      const pitched = b.roof && b.roof.shape && b.roof.shape !== "flat";
+      if (tier === 2 && pitched && (b.roof.shape === "gabled" || b.roof.shape === "hipped") && L.house && area > 30 && area < 500 && r(7) < 0.7) {
+        const box = orientedBox(ringW);
+        if (area / Math.max(box.L * box.W, 1e-6) >= 0.85) {
+          const rh = b.roof.h ?? defaultRoofHeight(b.roof.shape, box);
+          const hl = box.L / 2, ri = b.roof.shape === "hipped" ? Math.max(hl - box.W / 2, 0) : hl;
+          let u = (r(8) < 0.5 ? -1 : 1) * hl * 0.4;
+          u = Math.max(-ri * 0.7, Math.min(ri * 0.7, u));
+          const cx = box.cx + u * box.c, cz = box.cy + u * box.s;
+          T.setColor(new THREE.Color(0x8a4b3c));
+          abox(T, cx, cz, box.c, box.s, 0.3, 0.3, eaveY + rh * 0.4, eaveY + rh + 0.95);
+          T.setColor(new THREE.Color(0x6c6a66));
+          abox(T, cx, cz, box.c, box.s, 0.4, 0.4, eaveY + rh + 0.95, eaveY + rh + 1.08);
+        }
+      } else if (tier === 2 && !pitched && !L.house && area >= 80) {
+        const inner = insetRing(ringW, 1.6) || insetRing(ringW, 1.0);
+        if (inner) {
+          let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+          for (const [x, z] of ringW) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+          const rndPt = (salt) => {
+            for (let a = 0; a < 20; a++) {
+              const x = x0 + (x1 - x0) * hash01(id, salt * 31 + a * 2), z = z0 + (z1 - z0) * hash01(id, salt * 31 + a * 2 + 1);
+              if (pointInRing(x, z, inner)) return [x, z];
+            }
+            return null;
+          };
+          const box = orientedBox(ringW);
+          const top = eaveY + (b.glass ? 0 : 0);
+          const nUnits = Math.min(5, 1 + Math.floor(area / 300));
+          for (let k = 0; k < nUnits; k++) {
+            const p = rndPt(10 + k); if (!p) continue;
+            const hx = 0.7 + hash01(id, 40 + k) * 0.9, hz = 0.5 + hash01(id, 50 + k) * 0.7, hh = 0.8 + hash01(id, 60 + k) * 0.9;
+            T.setColor(new THREE.Color(0x9ca2a8));
+            abox(T, p[0], p[1], box.c, box.s, hx, hz, top, top + hh);
+            T.setColor(new THREE.Color(0x60656b));
+            abox(T, p[0], p[1], box.c, box.s, hx * 0.8, hz * 0.8, top + hh, top + hh + 0.08);
+            if (hash01(id, 70 + k) < 0.5) {   // vent pipe
+              T.setColor(new THREE.Color(0xd8dadc));
+              abox(T, p[0] + hx + 0.5, p[1], box.c, box.s, 0.1, 0.1, top, top + 0.9 + hash01(id, 80 + k) * 0.7);
+            }
+          }
+          if (b.height >= 10 && area >= 150) {   // stair / lift bulkhead
+            const cx = ringW.reduce((s, p) => s + p[0], 0) / n, cz = ringW.reduce((s, p) => s + p[1], 0) / n;
+            const p = pointInRing(cx, cz, inner) ? [cx, cz] : rndPt(99);
+            if (p) {
+              const big = b.height >= 30;
+              const hx = Math.min(big ? 4.5 : 2.0, box.L * 0.18), hz = Math.min(big ? 3.5 : 1.6, box.W * 0.18), hh = big ? 3.8 : 2.6;
+              T.setColor(tint(wallColor, 0.88));
+              abox(T, p[0], p[1], box.c, box.s, hx, hz, top, top + hh);
+              T.setColor(new THREE.Color(0x5b6066));
+              abox(T, p[0], p[1], box.c, box.s, hx + 0.12, hz + 0.12, top + hh, top + hh + 0.2);
+              if (b.height >= 60) {   // antenna
+                T.setColor(new THREE.Color(0xc23b3b));
+                abox(T, p[0], p[1], 1, 0, 0.12, 0.12, top + hh + 0.2, top + hh + 9);
+              }
+            }
+          }
+        }
+      }
+
+      return { detail: D.detail.toGeometry(), windows: D.glass.toGeometry() };
     }
 
     // ---- editable state (this is what gets saved / undone) ----
@@ -940,45 +1343,85 @@
 
     const newId = (prefix) => prefix + "-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
+    // Per-building geometry cache: editing one building doesn't rebuild the other few thousand.
+    const partsCache = new Map();   // id -> { key, parts }
+    let terrainStamp = 0;           // bumped when real elevation arrives (invalidates cached geometry)
+
     function rebuildBuildings() {
       buildingMeshes.forEach((m) => { scene.remove(m); m.geometry.dispose(); });
       buildingMeshes = [];
 
       const buckets = {
-        roof:  { geos: [], owners: [], mat: roofMat },
-        wall:  { geos: [], owners: [], mat: wallMat },
-        glass: { geos: [], owners: [], mat: glassMat }
+        roof:   { geos: [], owners: [], mat: roofMat },
+        wall:   { geos: [], owners: [], mat: wallMat },
+        glass:  { geos: [], owners: [], mat: glassMat },
+        detail: { geos: [], owners: [], mat: detailMat, noPick: true },
+        window: { geos: [], owners: [], mat: windowMat, noPick: true }
       };
       const put = (bucket, geo, id) => {
         bucket.geos.push(geo);
         for (let i = 0, n = geo.attributes.position.count / 3; i < n; i++) bucket.owners.push(id);   // one entry per triangle
       };
 
+      // visible buildings, nearest to the picked centre first, get detail tiers under the triangle budget
+      const items = [];
       for (const b of buildings.values()) {
         if (removed.has(b.id)) continue;
+        const ring = cleanRing(b.footprint);
+        if (ring.length < 3) continue;
+        const ringW = ring.map(([x, n]) => [x, -n]);
+        const cx = ringW.reduce((s, p) => s + p[0], 0) / ringW.length, cz = ringW.reduce((s, p) => s + p[1], 0) / ringW.length;
+        items.push({ b, id: b.id, ringW, dist: Math.hypot(cx, cz) });
+      }
+      const neighbors = makeNeighborIndex(items);
+      items.sort((p, q) => p.dist - q.dist);
+      let used = 0;
+      for (const it of items) {
+        it.tier = 0;
+        if (!DETAIL_BUDGET) continue;
+        const e2 = estimateDetail(it.ringW, it.b, 2);
+        if (used + e2 <= DETAIL_BUDGET) { it.tier = 2; used += e2; continue; }
+        const e1 = estimateDetail(it.ringW, it.b, 1);
+        if (used + e1 <= DETAIL_BUDGET * 1.9) { it.tier = 1; used += e1; }
+      }
+
+      const live = new Set();
+      for (const it of items) {
+        const b = it.b;
+        live.add(b.id);
         try {
-          const parts = buildingParts(b);
+          const key = JSON.stringify(b) + "|" + terrainStamp + "|" + it.tier + "|" + (it.tier ? neighbors.signature(b.id) : "");
+          let entry = partsCache.get(b.id);
+          if (!entry || entry.key !== key) {
+            entry = { key, parts: buildingParts(b, { tier: it.tier, neighbors }) };
+            partsCache.set(b.id, entry);
+          }
+          const parts = entry.parts;
           if (!parts) continue;
           for (const g of parts.walls) put(parts.glass ? buckets.glass : buckets.wall, g, b.id);
           for (const g of parts.roofs) { projectRoofUVs(g); put(buckets.roof, g, b.id); }
+          if (parts.detail) put(buckets.detail, parts.detail, b.id);
+          if (parts.windows) put(buckets.window, parts.windows, b.id);
         } catch (err) {
           console.warn("Skipped a building:", b.id, err);
         }
       }
+      for (const id of [...partsCache.keys()]) if (!live.has(id) && !buildings.has(id)) partsCache.delete(id);
 
       for (const k in buckets) {
-        const { geos, owners, mat } = buckets[k];
+        const { geos, owners, mat, noPick } = buckets[k];
         if (!geos.length) continue;
-        const merged = mergeGeometries(geos, false);
-        geos.forEach((g) => g.dispose());
+        const merged = mergeGeometries(geos, false);   // (cached geometries are kept - never dispose them here)
         if (!merged) continue;
         const mesh = new THREE.Mesh(merged, mat);
-        mesh.castShadow = true;
+        mesh.castShadow = k !== "detail" && k !== "window";
         mesh.receiveShadow = true;
         mesh.userData.owners = owners;    // triangle index -> building id
+        if (noPick) mesh.userData.noPick = true;   // windows/trim are never the crosshair target (their wall is)
         scene.add(mesh);
         buildingMeshes.push(mesh);
       }
+      if (DETAIL_PARAM === "debug") console.log("detail tris ~", used);
     }
 
     async function loadBuildings() {
@@ -1006,7 +1449,7 @@
 
         const id = "osm-" + el.id;
         buildings.set(id, {
-          id, footprint, height: wallHeight, roof,
+          id, footprint, height: wallHeight, roof, kind: tags.building || "yes",
           minHeight: num(tags.min_height, 0),
           wallColor: getWallColor(tags, totalHeight).getHex(),
           roofColor: getRoofColor(tags).getHex(),
@@ -1712,7 +2155,7 @@
         const ring = cleanRing(b.footprint);
         if (ring.length < 3) return;
         const base = terrainBase(ring.map(([x, n]) => [x, -n]));
-        const top = base + b.height + (b.roof ? (b.roof.h ?? 4) : 0) + 0.3;
+        const top = base + b.height + (b.roof ? (b.roof.h ?? 4) : 0) + 1.5;
         const geo = extrudeRing(ring, top - (base - SKIRT), base - SKIRT);
         highlight = new THREE.Group();
         highlight.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
@@ -1730,7 +2173,7 @@
 
     function pick() {
       raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-      const hit = raycaster.intersectObjects([...buildingMeshes, placementGroup], true)[0];
+      const hit = raycaster.intersectObjects([...buildingMeshes.filter((m) => !m.userData.noPick), placementGroup], true)[0];
       if (!hit) return null;
       if (hit.object.userData.owners) return hit.object.userData.owners[hit.faceIndex] || null;
       let o = hit.object;
@@ -1756,9 +2199,6 @@
     }
 
     // ---- actions ----
-    const hexOf = (css) => parseInt(css.slice(1), 16);
-    const roofFromUI = () => { const s = $("blockRoof").value; return s === "flat" ? null : { shape: s }; };
-
     function deleteSelected() {
       if (!selected) return toast("Nothing selected - click a building while looking at it");
       mutate(() => {
@@ -1784,31 +2224,6 @@
       });
     }
 
-    function makeBlockRecord(footprint) {
-      const wall = hexOf($("blockColor").value);
-      return {
-        id: newId("custom"),
-        footprint,
-        height: Math.max(3, +$("blockHeight").value || 24),
-        minHeight: 0,
-        wallColor: wall,
-        roofColor: new THREE.Color(wall).multiplyScalar(0.7).getHex(),
-        glass: $("blockGlass").checked,
-        roof: roofFromUI()
-      };
-    }
-
-    function replaceWithBlock() {
-      if (!selected || selected.startsWith("pl-")) return toast("Select a building first");
-      const old = buildings.get(selected);
-      mutate(() => {
-        removeBuilding(old.id);
-        const rec = makeBlockRecord(old.footprint.map((p) => [p[0], p[1]]));
-        buildings.set(rec.id, rec);
-        selected = rec.id;
-      });
-    }
-
     function placeModel() {
       const m = modelLib.get($("modelSelect").value);
       if (!m) return toast("Load a .glb file first");
@@ -1822,34 +2237,19 @@
       });
     }
 
-    function placeBlock() {
-      const pt = groundPoint();
-      if (!pt) return toast("Look down at the ground to place a block");
-      const half = Math.max(4, +$("blockSize").value || 20) / 2;
-      const ang = cameraHeading(), c = Math.cos(ang), s = Math.sin(ang);
-      const cx = pt.x, cn = -pt.z;   // local coords: x east, y north
-      const fp = [[-half, -half], [half, -half], [half, half], [-half, half]]
-        .map(([u, v]) => [cx + u * c - v * s, cn + u * s + v * c]);
-      mutate(() => {
-        const rec = makeBlockRecord(fp);
-        buildings.set(rec.id, rec);
-        selected = rec.id;
-      });
-    }
-
     function rotateSelected(dir) {
       if (!selected || !selected.startsWith("pl-")) return toast("Select a placed model to rotate it");
       mutate(() => { placements.find((p) => p.pid === selected).rotY += dir * Math.PI / 2; });
     }
 
     function adjustHeight(dir) {
-      if (!selected) return toast("Select a placed model or custom block first");
+      if (!selected) return toast("Select a placed model first");
       if (selected.startsWith("pl-")) {
         mutate(() => { placements.find((p) => p.pid === selected).sy *= dir > 0 ? 1.1 : 1 / 1.1; });
-      } else if (selected.startsWith("custom-")) {
+      } else if (selected.startsWith("custom-")) {   // custom blocks from older saved layouts
         mutate(() => { const b = buildings.get(selected); b.height = Math.max(3, b.height + dir * 2); });
       } else {
-        toast("Replace this building with a block first, then adjust its height");
+        toast("Select a placed model to change its height");
       }
     }
 
@@ -1904,8 +2304,6 @@
     $("btnUndo").onclick = undo;
     $("btnReplaceModel").onclick = replaceWithModel;
     $("btnPlaceModel").onclick = placeModel;
-    $("btnReplaceBlock").onclick = replaceWithBlock;
-    $("btnPlaceBlock").onclick = placeBlock;
     $("btnExport").onclick = exportLayout;
     $("btnImport").onclick = () => $("importFile").click();
     $("importFile").addEventListener("change", (e) => { if (e.target.files[0]) importLayout(e.target.files[0]); e.target.value = ""; });
@@ -1915,10 +2313,6 @@
         try { await addModelFile(f); } catch (err) { console.error(err); toast("Couldn't read " + f.name); }
       }
       e.target.value = "";
-    });
-    // changing the roof dropdown re-roofs the selected custom block
-    $("blockRoof").addEventListener("change", () => {
-      if (selected && selected.startsWith("custom-")) mutate(() => { buildings.get(selected).roof = roofFromUI(); });
     });
 
     // ---- start-up: restore autosaved edits, then fetch the map, terrain and imagery ----
@@ -1979,9 +2373,7 @@
       switch (e.code) {
         case "KeyX": case "Delete": deleteSelected(); break;
         case "KeyR": replaceWithModel(); break;
-        case "KeyB": replaceWithBlock(); break;
         case "KeyP": placeModel(); break;
-        case "KeyN": placeBlock(); break;
         case "KeyQ": rotateSelected(-1); break;
         case "KeyE": rotateSelected(1); break;
         case "BracketRight": adjustHeight(1); break;
@@ -2046,7 +2438,7 @@
       env: envGroup,
       state: () => ({ selected, removed: [...removed], placements }),
       select: (id) => { selected = id; updateHighlight(); updateUI(); },
-      actions: { deleteSelected, replaceWithModel, replaceWithBlock, placeModel, placeBlock, rotateSelected, adjustHeight }
+      actions: { deleteSelected, replaceWithModel, placeModel, rotateSelected, adjustHeight }
     };
   </script>
 </body>
