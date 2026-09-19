@@ -1937,6 +1937,45 @@
       .catch((err) => console.error("Could not load buildings:", err))
       .then(() => loadEnvironment())
       .catch((err) => console.error("Could not load roads/parks/trees:", err));
+    
+        // =====================================================================
+    // 7.5 Real street photos (Mapillary)
+    // =====================================================================
+    function distMeters(lat1, lng1, lat2, lng2) {
+      const R = 6371000;
+      const toRad = (d) => d * Math.PI / 180;
+      const dLat = toRad(lat2 - lat1);
+      const dLng = toRad(lng2 - lng1);
+      const a = Math.sin(dLat / 2) ** 2 +
+                Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(a));
+    }
+
+    async function searchMapillary(lat, lng, degBox) {
+      const url = `https://graph.mapillary.com/images?access_token=${MAPILLARY_TOKEN}` +
+        `&fields=id,thumb_1024_url,compass_angle,captured_at,geometry` +
+        `&bbox=${lng - degBox},${lat - degBox},${lng + degBox},${lat + degBox}` +
+        `&limit=20`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Mapillary HTTP " + res.status);
+      const json = await res.json();
+      return json.data || [];
+    }
+
+    async function findNearestPhoto(lat, lng) {
+      const attempts = [0.002, 0.006, 0.015];
+      for (const degBox of attempts) {
+        const results = await searchMapillary(lat, lng, degBox);
+        if (!results.length) continue;
+        const withDist = results.map((r) => ({
+          ...r,
+          distance: distMeters(lat, lng, r.geometry.coordinates[1], r.geometry.coordinates[0])
+        })).sort((a, b) => a.distance - b.distance);
+        return withDist[0];
+      }
+      return null;
+    }
+    window.findNearestPhoto = findNearestPhoto;
 
     // =====================================================================
     // 8. Flycam controls (Minecraft-creative style) + edit shortcuts
