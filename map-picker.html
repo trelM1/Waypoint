@@ -8,32 +8,40 @@
   <script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
   <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
   <style>
-    html, body, #map { margin: 0; padding: 0; height: 100%; }
-    #panel {
-      position: absolute; top: 12px; left: 12px; z-index: 1;
-      background: white; padding: 12px 16px; border-radius: 8px;
-      font-family: sans-serif; font-size: 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.3);
-      width: 220px;
-    }
-    #panel label { display: block; margin-top: 8px; }
-    #radiusValue { font-weight: bold; }
-    #info { margin-top: 8px; color: #555; font-size: 12px; }
-  </style>
+  html, body { margin: 0; padding: 0; height: 100%; }
+  #app { display: flex; height: 100%; }
+  #map { flex: 1; }
+  #panel {
+    width: 260px;
+    height: 100%;
+    box-sizing: border-box;
+    background: white;
+    padding: 16px;
+    font-family: sans-serif;
+    font-size: 14px;
+    box-shadow: -1px 0 4px rgba(0,0,0,0.15);
+    overflow-y: auto;
+  }
+  #panel label { display: block; margin-top: 8px; }
+  #radiusValue { font-weight: bold; }
+  #info { margin-top: 8px; color: #555; font-size: 12px; }
+</style>
 </head>
 <body>
-  <div id="panel">
-    <strong>Map Picker</strong>
-    <div id="info">Click the map to set a center point.</div>
-    <label>
-      Radius: <span id="radiusValue">300</span> m
-      <input type="range" id="radiusSlider" min="50" max="2000" step="50" value="300" style="width:100%">
-    </label>
+  <div id="app">
+    <div id="map"></div>
+    <div id="panel">
+      <strong>Map Picker</strong>
+      <div id="info">Click the map to set a center point.</div>
+      <label>
+        Radius: <span id="radiusValue">300</span> m
+        <input type="range" id="radiusSlider" min="50" max="2000" step="50" value="300" style="width:100%">
+      </label>
+    </div>
   </div>
-  <div id="map"></div>
 
   <script src="config.js"></script>
   <script>
-
     mapboxgl.accessToken = MAPBOX_TOKEN;
 
     const map = new mapboxgl.Map({
@@ -90,7 +98,6 @@
       updateCircle();
     });
 
-    // This is what you'll pass into the next step (fetching buildings in this area)
     function getSelection() {
       if (!center) return null;
       return { center, radiusMeters };
