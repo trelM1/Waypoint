@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <title>Map Picker</title>
@@ -8,100 +8,455 @@
   <script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
   <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
   <style>
-  html, body { margin: 0; padding: 0; height: 100%; }
-  #app { display: flex; height: 100%; }
-  #map { flex: 1; }
-  #panel {
-    width: 260px;
-    height: 100%;
-    box-sizing: border-box;
-    background: white;
-    padding: 16px;
-    font-family: sans-serif;
-    font-size: 14px;
-    box-shadow: -1px 0 4px rgba(0,0,0,0.15);
-    overflow-y: auto;
-  }
-  #panel label { display: block; margin-top: 8px; }
-  #radiusValue { font-weight: bold; }
-  #info { margin-top: 8px; color: #555; font-size: 12px; }
-</style>
+    :root {
+      --accent: #1d8fe1;
+      --accent-dark: #1673b8;
+      --ink: #14202b;
+      --muted: #6b7a89;
+      --line: #e3e9ef;
+      --bg: rgba(255, 255, 255, 0.92);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+      color: var(--ink);
+    }
+    #map { position: absolute; inset: 0; }
+
+    /* ---------- floating panel ---------- */
+    #panel {
+      position: absolute; top: 16px; left: 16px;
+      width: 300px; max-height: calc(100% - 32px);
+      overflow-y: auto;
+      background: var(--bg);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-radius: 16px;
+      box-shadow: 0 8px 30px rgba(20, 32, 43, 0.18), 0 1px 3px rgba(20, 32, 43, 0.12);
+      padding: 18px;
+      z-index: 5;
+    }
+    .title { display: flex; align-items: center; gap: 10px; }
+    .title .logo {
+      width: 32px; height: 32px; border-radius: 9px;
+      background: linear-gradient(135deg, #37a8f5, var(--accent-dark));
+      display: grid; place-items: center; color: #fff;
+    }
+    .title h1 { font-size: 16px; margin: 0; line-height: 1.2; }
+    .title p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+
+    .section { margin-top: 16px; }
+    .section-label {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 8px;
+    }
+
+    /* location readout */
+    #readout {
+      background: #f4f8fb; border: 1px solid var(--line);
+      border-radius: 10px; padding: 10px 12px; font-size: 13px;
+      min-height: 56px;
+    }
+    #readout .empty { color: var(--muted); }
+    #readout .row { display: flex; justify-content: space-between; gap: 8px; }
+    #readout .row + .row { margin-top: 4px; }
+    #readout .k { color: var(--muted); }
+    #readout .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+    /* radius */
+    .radius-head { display: flex; justify-content: space-between; align-items: baseline; }
+    #radiusValue { font-weight: 700; font-size: 18px; font-variant-numeric: tabular-nums; }
+    input[type=range] {
+      -webkit-appearance: none; appearance: none;
+      width: 100%; height: 6px; border-radius: 3px; margin: 12px 0 8px;
+      background: linear-gradient(to right, var(--accent) var(--fill, 15%), #d9e2ea var(--fill, 15%));
+      outline: none;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%;
+      background: #fff; border: 3px solid var(--accent); cursor: pointer;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+    }
+    input[type=range]::-moz-range-thumb {
+      width: 16px; height: 16px; border-radius: 50%;
+      background: #fff; border: 3px solid var(--accent); cursor: pointer;
+    }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip {
+      border: 1px solid var(--line); background: #fff; color: var(--ink);
+      border-radius: 999px; padding: 5px 11px; font-size: 12px; cursor: pointer;
+      transition: all 0.12s;
+    }
+    .chip:hover { border-color: var(--accent); color: var(--accent-dark); }
+    .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    /* CTA */
+    #confirm {
+      width: 100%; margin-top: 18px; padding: 12px 14px;
+      border: 0; border-radius: 10px; cursor: pointer;
+      background: var(--accent); color: #fff; font-size: 14px; font-weight: 600;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      transition: background 0.12s, opacity 0.12s, transform 0.05s;
+    }
+    #confirm:hover:not(:disabled) { background: var(--accent-dark); }
+    #confirm:active:not(:disabled) { transform: translateY(1px); }
+    #confirm:disabled { opacity: 0.45; cursor: not-allowed; }
+    kbd {
+      font-family: inherit; font-size: 11px; font-weight: 600;
+      background: rgba(255,255,255,0.25); border-radius: 5px; padding: 2px 6px;
+    }
+    .hint { margin-top: 8px; text-align: center; font-size: 11px; color: var(--muted); }
+
+    /* toast */
+    #toast {
+      position: absolute; top: 20px; left: 50%;
+      transform: translate(-50%, -20px); opacity: 0; pointer-events: none;
+      background: #14202b; color: #fff; font-size: 13px;
+      padding: 10px 16px; border-radius: 999px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+      transition: opacity 0.2s, transform 0.2s; z-index: 10;
+    }
+    #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    /* marker */
+    .pin { width: 22px; height: 22px; position: relative; cursor: grab; }
+    .pin::before {
+      content: ""; position: absolute; inset: 0; border-radius: 50%;
+      background: var(--accent); border: 3px solid #fff;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+    }
+    .pin::after {
+      content: ""; position: absolute; inset: -6px; border-radius: 50%;
+      border: 2px solid var(--accent); opacity: 0;
+      animation: pulse 1.8s ease-out infinite;
+    }
+    @keyframes pulse {
+      0% { transform: scale(0.6); opacity: 0.8; }
+      100% { transform: scale(1.6); opacity: 0; }
+    }
+
+    .mapboxgl-canvas-container.blocked { cursor: not-allowed; }
+    .mapboxgl-canvas-container.allowed .mapboxgl-canvas { cursor: crosshair; }
+
+    @media (max-width: 600px) {
+      #panel { width: auto; right: 16px; }
+    }
+
+    /* ---------- start screen ---------- */
+    #panel { transition: opacity 0.5s ease 0.15s, transform 0.5s ease 0.15s; }
+    body:not(.started) #panel { opacity: 0; transform: translateX(-16px); pointer-events: none; }
+
+    #start {
+      position: absolute; inset: 0; z-index: 20;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: #f4f8fb; color: var(--ink);
+      transition: opacity 0.4s ease, visibility 0.4s;
+    }
+    body.started #start { opacity: 0; visibility: hidden; pointer-events: none; }
+    #start h1 {
+      margin: 0 0 28px; font-size: clamp(44px, 9vw, 80px);
+      font-weight: 800; letter-spacing: -0.03em; line-height: 1;
+    }
+    #startBtn {
+      padding: 14px 44px; border: 0; border-radius: 999px; cursor: pointer;
+      background: var(--accent); color: #fff;
+      font-size: 16px; font-weight: 700; font-family: inherit;
+      transition: background 0.12s, transform 0.12s;
+    }
+    #startBtn:hover { background: var(--accent-dark); transform: translateY(-1px); }
+    #startBtn:focus-visible { outline: 3px solid rgba(29, 143, 225, 0.4); outline-offset: 3px; }
+  </style>
 </head>
 <body>
-  <div id="app">
-    <div id="map"></div>
-    <div id="panel">
-      <strong>Map Picker</strong>
-      <div id="info">Click the map to set a center point.</div>
-      <label>
-        Radius: <span id="radiusValue">300</span> m
-        <input type="range" id="radiusSlider" min="50" max="2000" step="50" value="300" style="width:100%">
-      </label>
+  <div id="map"></div>
+
+  <div id="panel">
+    <div class="title">
+      <div class="logo">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>
+      </div>
+      <div>
+        <h1>Pick an area</h1>
+        <p>Kitchener &ndash; Waterloo</p>
+      </div>
     </div>
+
+    <div class="section">
+      <div class="section-label">Jump to</div>
+      <div class="chips" id="places"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Location</div>
+      <div id="readout"><span class="empty">Click the map to drop a pin.</span></div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Radius</div>
+      <div class="radius-head">
+        <span id="radiusValue">300 m</span>
+      </div>
+      <input type="range" id="radiusSlider" min="50" max="2000" step="50" value="300">
+      <div class="chips" id="presets"></div>
+    </div>
+
+    <button id="confirm" disabled>Explore this area <kbd>Enter &crarr;</kbd></button>
+    <div class="hint">Drag the pin to fine-tune. Clicks outside K-W are ignored.</div>
+  </div>
+
+  <div id="toast"></div>
+
+  <div id="start">
+    <h1>WAYPOINT</h1>
+    <button id="startBtn">START</button>
   </div>
 
   <script src="config.js"></script>
   <script>
     mapboxgl.accessToken = MAPBOX_TOKEN;
 
-    const map = new mapboxgl.Map({
-      container: "map",
-      style: "mapbox://styles/mapbox/light-v11",
-      center: [-79.3832, 43.6532], // default: Toronto, change as needed
-      zoom: 14
-    });
+    // ---------- Kitchener-Waterloo bounds ----------
+    // [west, south, east, north] - roughly covers both cities' urban areas
+    const KW_BBOX = [-80.60, 43.37, -80.38, 43.53];
+    const KW_POLY = turf.bboxPolygon(KW_BBOX);
+    const PAD = 0.04; // how far past the border the user can pan
+    const MAX_BOUNDS = [
+      [KW_BBOX[0] - PAD, KW_BBOX[1] - PAD],
+      [KW_BBOX[2] + PAD, KW_BBOX[3] + PAD]
+    ];
 
+    const PLACES = [
+      { name: "UWaterloo",      lngLat: [-80.5449, 43.4723] },
+      { name: "Laurier",        lngLat: [-80.5290, 43.4738] },
+      { name: "Uptown Waterloo",lngLat: [-80.5204, 43.4643] },
+      { name: "Downtown Kitchener", lngLat: [-80.4925, 43.4516] },
+      { name: "Conestoga Mall", lngLat: [-80.5215, 43.5002] }
+    ];
+    const RADIUS_PRESETS = [100, 300, 500, 1000, 2000];
+
+    // ---------- state ----------
     let center = null;
     let radiusMeters = 300;
     let marker = null;
 
-    function updateCircle() {
-      if (!center) return;
+    const $ = (id) => document.getElementById(id);
+    const isInside = (lngLat) => turf.booleanPointInPolygon(turf.point(lngLat), KW_POLY);
 
-      const circle = turf.circle(center, radiusMeters / 1000, { units: "kilometers" });
+    // ---------- map ----------
+    const map = new mapboxgl.Map({
+      container: "map",
+      style: "mapbox://styles/mapbox/streets-v12",
+      bounds: KW_BBOX,
+      fitBoundsOptions: { padding: { top: 40, bottom: 40, left: 360, right: 40 } },
+      maxBounds: MAX_BOUNDS,
+      minZoom: 10.5,
+      maxZoom: 18,
+      dragRotate: false,
+      pitchWithRotate: false,
+      attributionControl: false
+    });
+    map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
+    map.addControl(new mapboxgl.AttributionControl({ compact: true }), "bottom-right");
+    map.touchZoomRotate.disableRotation();
 
-      const source = map.getSource("radius-circle");
-      if (source) {
-        source.setData(circle);
-      } else {
-        map.addSource("radius-circle", { type: "geojson", data: circle });
-        map.addLayer({
-          id: "radius-circle-fill",
-          type: "fill",
-          source: "radius-circle",
-          paint: { "fill-color": "#1d8fe1", "fill-opacity": 0.2 }
-        });
-        map.addLayer({
-          id: "radius-circle-outline",
-          type: "line",
-          source: "radius-circle",
-          paint: { "line-color": "#1d8fe1", "line-width": 2 }
-        });
-      }
+    map.on("load", () => {
+      // Dim everything outside the allowed area (world polygon with a hole)
+      const world = [[-180, -90], [180, -90], [180, 90], [-180, 90], [-180, -90]];
+      const hole = KW_POLY.geometry.coordinates[0].slice().reverse();
+      map.addSource("kw-mask", {
+        type: "geojson",
+        data: { type: "Feature", geometry: { type: "Polygon", coordinates: [world, hole] } }
+      });
+      map.addLayer({
+        id: "kw-mask-fill", type: "fill", source: "kw-mask",
+        paint: { "fill-color": "#0b1620", "fill-opacity": 0.35 }
+      });
 
-      document.getElementById("info").textContent =
-        `Center: ${center[1].toFixed(5)}, ${center[0].toFixed(5)} | Radius: ${radiusMeters} m`;
+      // Dashed boundary
+      map.addSource("kw-border", { type: "geojson", data: KW_POLY });
+      map.addLayer({
+        id: "kw-border-line", type: "line", source: "kw-border",
+        paint: { "line-color": "#0b1620", "line-width": 1.5, "line-opacity": 0.5, "line-dasharray": [3, 2] }
+      });
+
+      // Radius circle
+      map.addSource("radius-circle", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "radius-circle-fill", type: "fill", source: "radius-circle",
+        paint: { "fill-color": "#1d8fe1", "fill-opacity": 0.2 }
+      });
+      map.addLayer({
+        id: "radius-circle-outline", type: "line", source: "radius-circle",
+        paint: { "line-color": "#1d8fe1", "line-width": 2.5 }
+      });
+
+      if (center) updateCircle();
+    });
+
+    // ---------- UI helpers ----------
+    let toastTimer;
+    function toast(msg) {
+      const el = $("toast");
+      el.textContent = msg;
+      el.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
     }
 
-    map.on("click", (e) => {
-      center = [e.lngLat.lng, e.lngLat.lat];
+    function formatRadius(m) {
+      return m >= 1000 ? `${(m / 1000).toFixed(m % 1000 ? 2 : 0).replace(/0$/, "")} km` : `${m} m`;
+    }
 
-      if (marker) marker.remove();
-      marker = new mapboxgl.Marker({ color: "#1d8fe1" }).setLngLat(center).addTo(map);
+    function updateReadout() {
+      const el = $("readout");
+      if (!center) {
+        el.innerHTML = '<span class="empty">Click the map to drop a pin.</span>';
+        return;
+      }
+      const areaKm2 = (Math.PI * Math.pow(radiusMeters / 1000, 2)).toFixed(2);
+      el.innerHTML = `
+        <div class="row"><span class="k">Lat</span><span class="v">${center[1].toFixed(5)}</span></div>
+        <div class="row"><span class="k">Lng</span><span class="v">${center[0].toFixed(5)}</span></div>
+        <div class="row"><span class="k">Area</span><span class="v">${areaKm2} km&sup2;</span></div>`;
+    }
 
+    function updateRadiusUI() {
+      const slider = $("radiusSlider");
+      const pct = ((radiusMeters - slider.min) / (slider.max - slider.min)) * 100;
+      slider.style.setProperty("--fill", pct + "%");
+      slider.value = radiusMeters;
+      $("radiusValue").textContent = formatRadius(radiusMeters);
+      document.querySelectorAll("#presets .chip").forEach((c) =>
+        c.classList.toggle("active", Number(c.dataset.r) === radiusMeters));
+    }
+
+    function updateCircle() {
+      if (!center) return;
+      const src = map.getSource("radius-circle");
+      if (!src) return; // map not loaded yet; load handler will call us again
+      src.setData(turf.circle(center, radiusMeters / 1000, { units: "kilometers", steps: 96 }));
+    }
+
+    function refresh() {
       updateCircle();
+      updateReadout();
+      updateRadiusUI();
+      $("confirm").disabled = !center;
+    }
+
+    // ---------- pin handling ----------
+    function makePin() {
+      const el = document.createElement("div");
+      el.className = "pin";
+      return el;
+    }
+
+    function setCenter(lngLat, { fly = false } = {}) {
+      if (!isInside(lngLat)) {
+        toast("Pick a spot within Kitchener–Waterloo");
+        return false;
+      }
+      center = lngLat;
+
+      if (!marker) {
+        marker = new mapboxgl.Marker({ element: makePin(), draggable: true })
+          .setLngLat(center).addTo(map);
+        let lastGood = center;
+        marker.on("dragstart", () => { lastGood = center; });
+        marker.on("drag", () => {
+          const p = marker.getLngLat();
+          center = [p.lng, p.lat];
+          updateCircle();
+          updateReadout();
+        });
+        marker.on("dragend", () => {
+          const p = marker.getLngLat();
+          if (!isInside([p.lng, p.lat])) {
+            center = lastGood;
+            marker.setLngLat(center);
+            toast("Pin has to stay within Kitchener–Waterloo");
+          }
+          refresh();
+        });
+      } else {
+        marker.setLngLat(center);
+      }
+
+      if (fly) map.flyTo({ center, zoom: Math.max(map.getZoom(), 14.5), duration: 900 });
+      refresh();
+      return true;
+    }
+
+    // ---------- events ----------
+    map.on("click", (e) => setCenter([e.lngLat.lng, e.lngLat.lat]));
+
+    // cursor feedback: crosshair inside the area, not-allowed outside
+    map.on("mousemove", (e) => {
+      const container = map.getCanvasContainer();
+      const ok = isInside([e.lngLat.lng, e.lngLat.lat]);
+      container.classList.toggle("allowed", ok);
+      container.classList.toggle("blocked", !ok);
     });
 
-    document.getElementById("radiusSlider").addEventListener("input", (e) => {
+    $("radiusSlider").addEventListener("input", (e) => {
       radiusMeters = parseInt(e.target.value, 10);
-      document.getElementById("radiusValue").textContent = radiusMeters;
-      updateCircle();
+      refresh();
     });
 
+    // presets + landmark chips
+    RADIUS_PRESETS.forEach((r) => {
+      const b = document.createElement("button");
+      b.className = "chip";
+      b.dataset.r = r;
+      b.textContent = formatRadius(r);
+      b.onclick = () => { radiusMeters = r; refresh(); };
+      $("presets").appendChild(b);
+    });
+    PLACES.forEach((p) => {
+      const b = document.createElement("button");
+      b.className = "chip";
+      b.textContent = p.name;
+      b.onclick = () => setCenter(p.lngLat, { fly: true });
+      $("places").appendChild(b);
+    });
+
+    // ---------- confirm -> explore view ----------
     function getSelection() {
       if (!center) return null;
       return { center, radiusMeters };
     }
+
+    function confirmSelection() {
+      const selection = getSelection();
+      if (!selection) { toast("Click the map to choose a spot first"); return; }
+      // Hook for the explore view: define window.onPickerConfirm, or listen for the event.
+      window.dispatchEvent(new CustomEvent("picker:confirm", { detail: selection }));
+      if (typeof window.onPickerConfirm === "function") window.onPickerConfirm(selection);
+    }
+
+    $("confirm").addEventListener("click", confirmSelection);
+
+    // ---------- start screen ----------
+    let started = false;
+    function startApp() {
+      if (started) return;
+      started = true;
+      document.body.classList.add("started");
+      $("startBtn").blur();
+    }
+    $("startBtn").addEventListener("click", startApp);
+
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.repeat) {
+        e.preventDefault();
+        // First Enter dismisses the start screen; later Enters confirm the selection.
+        if (!started) { startApp(); return; }
+        confirmSelection();
+      }
+    });
+
+    refresh();
   </script>
 </body>
 </html>
