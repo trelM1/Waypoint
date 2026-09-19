@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <title>Explorer View</title>
   <style>
-    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #cfe3f1; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #cfe3f1; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
     #crosshair {
       position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
       width: 6px; height: 6px; border-radius: 50%; background: white;
@@ -13,20 +13,108 @@
     #hint {
       position: absolute; bottom: 16px; left: 16px; z-index: 2;
       background: rgba(0,0,0,0.6); color: white; padding: 10px 14px;
-      border-radius: 6px; font-family: sans-serif; font-size: 13px; max-width: 260px;
+      border-radius: 6px; font-size: 12.5px; line-height: 1.5; max-width: 330px;
+      pointer-events: none;
     }
+    #hint b { color: #ffc46b; font-weight: 600; }
     #backLink {
       position: absolute; top: 12px; left: 12px; z-index: 2;
       background: rgba(0,0,0,0.6); color: white; padding: 6px 12px;
-      border-radius: 6px; font-family: sans-serif; font-size: 13px;
-      text-decoration: none;
+      border-radius: 6px; font-size: 13px; text-decoration: none;
     }
+
+    /* ---------- edit panel ---------- */
+    #ui {
+      position: absolute; top: 12px; right: 12px; z-index: 3; width: 264px;
+      max-height: calc(100% - 24px); overflow-y: auto;
+      background: rgba(255,255,255,0.94); color: #14202b;
+      border-radius: 12px; padding: 14px; font-size: 12.5px;
+      box-shadow: 0 8px 30px rgba(20,32,43,0.25);
+    }
+    #ui h2 { margin: 0 0 6px; font-size: 14px; }
+    #ui h3 { margin: 14px 0 6px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #6b7a89; }
+    #ui .note { color: #6b7a89; font-size: 11.5px; }
+    #sel { background: #f4f8fb; border: 1px solid #e3e9ef; border-radius: 8px; padding: 8px 10px; min-height: 34px; }
+    #ui button {
+      width: 100%; margin-top: 6px; padding: 7px 10px; border: 0; border-radius: 8px;
+      background: #1d8fe1; color: #fff; font-size: 12.5px; font-weight: 600; cursor: pointer;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    #ui button:hover { background: #1673b8; }
+    #ui button.secondary { background: #e9eff5; color: #14202b; }
+    #ui button.secondary:hover { background: #dbe5ee; }
+    #ui .row { display: flex; gap: 6px; }
+    #ui .row button { margin-top: 6px; }
+    #ui label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+    #ui input[type=number] { width: 70px; }
+    #ui input[type=file] { width: 100%; margin-top: 4px; font-size: 11.5px; }
+    #ui select { max-width: 150px; }
+    kbd {
+      font-family: inherit; font-size: 10.5px; font-weight: 600;
+      background: rgba(0,0,0,0.12); border-radius: 4px; padding: 1px 5px;
+    }
+    #ui button:not(.secondary) kbd { background: rgba(255,255,255,0.28); }
+    #pending { margin-top: 8px; color: #b45309; font-size: 11.5px; }
+    #toast {
+      position: absolute; bottom: 24px; left: 50%; transform: translate(-50%, 10px); opacity: 0;
+      background: #14202b; color: #fff; font-size: 13px; padding: 9px 16px; border-radius: 999px;
+      pointer-events: none; transition: opacity .2s, transform .2s; z-index: 10;
+    }
+    #toast.show { opacity: 1; transform: translate(-50%, 0); }
   </style>
 </head>
 <body>
   <div id="crosshair"></div>
-  <div id="hint">Click anywhere to look around.<br>WASD to move, Space/Shift for up/down, Esc to release.</div>
+  <div id="hint">
+    Click to look around &middot; <b>WASD</b> move &middot; <b>Space/Shift</b> up/down &middot; <b>Esc</b> release mouse<br>
+    While looking: <b>click</b> select &middot; <b>X</b> delete &middot; <b>R</b> replace w/ model &middot; <b>B</b> replace w/ block<br>
+    <b>P</b> place model &middot; <b>N</b> place block &middot; <b>Q/E</b> rotate &middot; <b>[ ]</b> height &middot; <b>Z</b> undo
+  </div>
   <a id="backLink" href="map-picker.html">&larr; Back to picker</a>
+
+  <div id="ui">
+    <h2>Edit buildings</h2>
+    <div id="sel">Nothing selected.</div>
+    <div class="row">
+      <button id="btnDelete">Delete <kbd>X</kbd></button>
+      <button id="btnUndo" class="secondary">Undo <kbd>Z</kbd></button>
+    </div>
+
+    <h3>3D model (.glb)</h3>
+    <input type="file" id="modelFile" accept=".glb,.gltf" multiple>
+    <label>Active model <select id="modelSelect"><option value="">(none loaded)</option></select></label>
+    <label>Fit
+      <select id="fitMode">
+        <option value="uniform">Fit footprint (keep shape)</option>
+        <option value="stretch">Stretch to footprint</option>
+        <option value="keep">Keep original size</option>
+      </select>
+    </label>
+    <label>Height (m, 0 = auto) <input type="number" id="modelHeight" value="0" min="0" step="1"></label>
+    <button id="btnReplaceModel">Replace selected with model <kbd>R</kbd></button>
+    <button id="btnPlaceModel">Place model at crosshair <kbd>P</kbd></button>
+
+    <h3>Procedural block</h3>
+    <label>Colour <input type="color" id="blockColor" value="#d9c9b5"></label>
+    <label>Height (m) <input type="number" id="blockHeight" value="24" min="3" step="1"></label>
+    <label>Size when placed (m) <input type="number" id="blockSize" value="20" min="4" step="1"></label>
+    <label>Glass facade <input type="checkbox" id="blockGlass"></label>
+    <button id="btnReplaceBlock">Replace selected with block <kbd>B</kbd></button>
+    <button id="btnPlaceBlock">Place block at crosshair <kbd>N</kbd></button>
+
+    <h3>Layout</h3>
+    <div class="row">
+      <button id="btnExport" class="secondary">Export</button>
+      <button id="btnImport" class="secondary">Import</button>
+      <button id="btnReset" class="secondary">Reset</button>
+    </div>
+    <input type="file" id="importFile" accept=".json" style="display:none">
+    <div class="note" id="counts" style="margin-top:8px"></div>
+    <div id="pending"></div>
+    <div class="note" style="margin-top:8px">Edits autosave in this browser. Press Esc to free the mouse before using the panel. Model files are not saved &mdash; re-select them after a reload and placements reappear.</div>
+  </div>
+
+  <div id="toast"></div>
 
   <script type="importmap">
     {
@@ -40,12 +128,15 @@
   <script type="module">
     import * as THREE from "three";
     import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
+    import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+
+    const $ = (id) => document.getElementById(id);
 
     // =====================================================================
     // 1. Read the selection passed in from the picker
     // =====================================================================
-    console.log("explorer.html v2 (windows, shadows, roads, parks, trees)");
+    console.log("explorer.html v3 (editable buildings)");
     const params = new URLSearchParams(window.location.search);
     let centerLat = parseFloat(params.get("lat"));
     let centerLng = parseFloat(params.get("lng"));
@@ -231,7 +322,11 @@
     }
 
     // =====================================================================
-    // 5. Buildings (merged into 3 meshes: roofs, walls, glass towers)
+    // 5. Buildings
+    //    Every building (OSM or custom) is a record in `buildings`. The
+    //    visible meshes are re-merged from those records whenever something
+    //    changes, and each merged triangle remembers which building owns it
+    //    so the crosshair can pick individual buildings.
     // =====================================================================
     const MATERIAL_COLORS = {
       brick: 0xb0654d, concrete: 0xbdbdb5, stone: 0xc9bfa8, wood: 0xa67b50,
@@ -296,15 +391,61 @@
       return geo;
     }
 
-    function addMerged(geos, material) {
-      if (!geos.length) return;
-      const merged = mergeGeometries(geos, false);
-      geos.forEach((g) => g.dispose());
-      if (!merged) return;
-      const mesh = new THREE.Mesh(merged, material);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      scene.add(mesh);
+    // ---- editable state (this is what gets saved / undone) ----
+    const buildings = new Map();   // id -> { id, footprint, height, minHeight, wallColor(hex), roofColor(hex), glass }
+    let removed = new Set();       // OSM building ids that are hidden
+    let placements = [];           // imported .glb instances: { pid, modelName, x, z, rotY, sx, sy, sz, replaces }
+    let selected = null;           // building id ("osm-..." / "custom-...") or placement id ("pl-...")
+    let buildingMeshes = [];
+    const placementGroup = new THREE.Group();
+    scene.add(placementGroup);
+    const history = [];            // JSON snapshots for undo
+
+    const newId = (prefix) => prefix + "-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+    function rebuildBuildings() {
+      buildingMeshes.forEach((m) => { scene.remove(m); m.geometry.dispose(); });
+      buildingMeshes = [];
+
+      const buckets = {
+        roof:  { geos: [], owners: [], mat: roofMat },
+        wall:  { geos: [], owners: [], mat: wallMat },
+        glass: { geos: [], owners: [], mat: glassMat }
+      };
+
+      for (const b of buildings.values()) {
+        if (removed.has(b.id)) continue;
+        try {
+          const geo = buildExtrusion(b.footprint, b.height, b.minHeight || 0);
+          if (!geo) continue;
+          const wallColor = new THREE.Color(b.wallColor);
+          const roofColor = new THREE.Color(b.roofColor);
+          // ExtrudeGeometry group 0 = top/bottom caps (roof), group 1 = side walls
+          for (const g of geo.groups) {
+            const isRoof = g.materialIndex === 0;
+            const bucket = isRoof ? buckets.roof : (b.glass ? buckets.glass : buckets.wall);
+            bucket.geos.push(sliceGeometry(geo, g.start, g.count, isRoof ? roofColor : wallColor));
+            for (let i = 0; i < g.count / 3; i++) bucket.owners.push(b.id); // one entry per triangle
+          }
+          geo.dispose();
+        } catch (err) {
+          console.warn("Skipped a building:", b.id, err);
+        }
+      }
+
+      for (const k in buckets) {
+        const { geos, owners, mat } = buckets[k];
+        if (!geos.length) continue;
+        const merged = mergeGeometries(geos, false);
+        geos.forEach((g) => g.dispose());
+        if (!merged) continue;
+        const mesh = new THREE.Mesh(merged, mat);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.userData.owners = owners;    // triangle index -> building id
+        scene.add(mesh);
+        buildingMeshes.push(mesh);
+      }
     }
 
     async function loadBuildings() {
@@ -313,40 +454,26 @@
       const ways = data.elements.filter((el) => el.type === "way" && el.geometry);
       console.log("Overpass returned", data.elements.length, "elements,", ways.length, "usable building ways");
 
-      const roofGeos = [], wallGeos = [], glassGeos = [];
-      let added = 0;
-
       for (const el of ways) {
-        try {
-          const tags = el.tags || {};
-          const footprint = el.geometry.map((pt) => latLngToLocal(pt.lat, pt.lon, centerLat, centerLng));
-          const levels = num(tags["building:levels"], 3);
-          const height = num(tags.height, levels * 3);
-          const minHeight = num(tags.min_height, 0);
-
-          const geo = buildExtrusion(footprint, height, minHeight);
-          if (!geo) continue;
-
-          const wallColor = getWallColor(tags, height);
-          const roofColor = getRoofColor(tags);
-          const wallBucket = isGlassBuilding(tags, height) ? glassGeos : wallGeos;
-
-          // ExtrudeGeometry group 0 = top/bottom caps (roof), group 1 = side walls
-          for (const g of geo.groups) {
-            if (g.materialIndex === 0) roofGeos.push(sliceGeometry(geo, g.start, g.count, roofColor));
-            else wallBucket.push(sliceGeometry(geo, g.start, g.count, wallColor));
-          }
-          geo.dispose();
-          added++;
-        } catch (err) {
-          console.warn("Skipped a building:", err);
-        }
+        const tags = el.tags || {};
+        const footprint = el.geometry.map((pt) => latLngToLocal(pt.lat, pt.lon, centerLat, centerLng));
+        if (footprint.length < 3) continue;
+        const levels = num(tags["building:levels"], 3);
+        const height = num(tags.height, levels * 3);
+        const id = "osm-" + el.id;
+        buildings.set(id, {
+          id, footprint, height,
+          minHeight: num(tags.min_height, 0),
+          wallColor: getWallColor(tags, height).getHex(),
+          roofColor: getRoofColor(tags).getHex(),
+          glass: isGlassBuilding(tags, height)
+        });
       }
 
-      addMerged(roofGeos, roofMat);
-      addMerged(wallGeos, wallMat);
-      addMerged(glassGeos, glassMat);
-      console.log(added + " buildings loaded");
+      rebuildBuildings();
+      updateHighlight();
+      updateUI();
+      console.log(ways.length + " buildings loaded");
     }
 
     // =====================================================================
@@ -562,6 +689,405 @@
       console.log("Roads:", roadPos.length / 18, "segments, paths:", pathPos.length / 18, "segments, trees:", trees.length);
     }
 
+    // =====================================================================
+    // 7. Editing: 3D model library, placements, selection, undo, saving
+    // =====================================================================
+    let toastTimer;
+    function toast(msg) {
+      const el = $("toast");
+      el.textContent = msg;
+      el.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove("show"), 2400);
+    }
+
+    // ---- geometry helpers ----
+    // Centre, orientation (along the longest edge) and size of a footprint.
+    // Returned x/z are WORLD coordinates (z = -north); rotY is the Y rotation that
+    // lines a model's local X axis up with the footprint's long side.
+    function footprintInfo(fp) {
+      // OSM rings repeat the first point at the end; drop it so it doesn't skew anything
+      const f = fp[0][0] === fp[fp.length - 1][0] && fp[0][1] === fp[fp.length - 1][1] ? fp.slice(0, -1) : fp;
+      fp = f;
+      const cx = fp.reduce((s, p) => s + p[0], 0) / fp.length;   // rough centre, refined below
+      const cy = fp.reduce((s, p) => s + p[1], 0) / fp.length;
+      let best = 0, ang = 0;
+      for (let i = 0; i < fp.length; i++) {
+        const a = fp[i], b = fp[(i + 1) % fp.length];
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        if (len > best) { best = len; ang = Math.atan2(b[1] - a[1], b[0] - a[0]); }
+      }
+      const c = Math.cos(ang), s = Math.sin(ang);
+      let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+      for (const [x, y] of fp) {
+        const u = (x - cx) * c + (y - cy) * s, v = -(x - cx) * s + (y - cy) * c;
+        minU = Math.min(minU, u); maxU = Math.max(maxU, u);
+        minV = Math.min(minV, v); maxV = Math.max(maxV, v);
+      }
+      // centre of the oriented bounding box (better than the vertex average for L-shapes etc.)
+      const mu = (minU + maxU) / 2, mv = (minV + maxV) / 2;
+      const ex = cx + mu * c - mv * s, ey = cy + mu * s + mv * c;
+      return { x: ex, z: -ey, rotY: ang, length: maxU - minU, width: maxV - minV };
+    }
+
+    // ---- model library ----
+    const gltfLoader = new GLTFLoader();
+    const modelLib = new Map(); // file name -> { root, size, offset }
+
+    async function addModelFile(file) {
+      const buf = await file.arrayBuffer();
+      const gltf = await gltfLoader.parseAsync(buf, "");
+      gltf.scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+
+      const root = new THREE.Group();
+      root.add(gltf.scene);
+      root.updateMatrixWorld(true);
+      let box = new THREE.Box3().setFromObject(root);
+      let size = box.getSize(new THREE.Vector3());
+      if (size.z > size.x) {             // make the long axis X so it lines up with footprints
+        root.rotation.y = Math.PI / 2;
+        root.updateMatrixWorld(true);
+        box = new THREE.Box3().setFromObject(root);
+        size = box.getSize(new THREE.Vector3());
+      }
+      const c = box.getCenter(new THREE.Vector3());
+      // offset: puts the model's footprint centre at the origin and its base on y = 0
+      modelLib.set(file.name, { root, size, offset: new THREE.Vector3(-c.x, -box.min.y, -c.z) });
+
+      refreshModelSelect(file.name);
+      rebuildPlacements();      // placements that were waiting for this file appear now
+      updateHighlight();
+      updateUI();
+      toast(`Loaded ${file.name} (${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)} m)`);
+    }
+
+    function refreshModelSelect(activeName) {
+      const sel = $("modelSelect");
+      const current = activeName || sel.value;
+      sel.innerHTML = "";
+      if (!modelLib.size) sel.innerHTML = '<option value="">(none loaded)</option>';
+      for (const name of modelLib.keys()) {
+        const o = document.createElement("option");
+        o.value = o.textContent = name;
+        sel.appendChild(o);
+      }
+      if (modelLib.has(current)) sel.value = current;
+    }
+
+    function computeScale(size, info, mode, heightOverride) {
+      let sx = 1, sy = 1, sz = 1;
+      if (info && mode !== "keep") {
+        const kx = info.length / Math.max(size.x, 0.01);
+        const kz = info.width / Math.max(size.z, 0.01);
+        if (mode === "stretch") { sx = kx; sz = kz; sy = Math.min(kx, kz); }
+        else { sx = sy = sz = Math.min(kx, kz); }
+      }
+      if (heightOverride > 0) sy = heightOverride / Math.max(size.y, 0.01);
+      return { sx, sy, sz };
+    }
+
+    // ---- placements (imported models in the scene) ----
+    function makeHolder(p) {
+      const m = modelLib.get(p.modelName);
+      if (!m) return null;
+      const holder = new THREE.Group();
+      const inst = m.root.clone(true);   // shares geometry + materials, so it's cheap
+      inst.position.copy(m.offset);
+      holder.add(inst);
+      holder.position.set(p.x, 0, p.z);
+      holder.rotation.y = p.rotY;
+      holder.scale.set(p.sx, p.sy, p.sz);
+      holder.userData.pid = p.pid;
+      return holder;
+    }
+
+    function rebuildPlacements() {
+      placementGroup.clear();
+      for (const p of placements) {
+        const h = makeHolder(p);
+        if (h) placementGroup.add(h);
+      }
+    }
+
+    // ---- state: serialize / apply / undo / save ----
+    const storageKey = `waypoint:${centerLat.toFixed(4)},${centerLng.toFixed(4)},${radiusMeters}`;
+
+    function serialize() {
+      return {
+        removed: [...removed],
+        customs: [...buildings.values()].filter((b) => b.id.startsWith("custom-")),
+        placements
+      };
+    }
+
+    function applyState(s) {
+      removed = new Set(s.removed || []);
+      for (const id of [...buildings.keys()]) if (id.startsWith("custom-")) buildings.delete(id);
+      for (const c of s.customs || []) buildings.set(c.id, { ...c });
+      placements = (s.placements || []).map((p) => ({ ...p }));
+    }
+
+    function save() {
+      try { localStorage.setItem(storageKey, JSON.stringify(serialize())); } catch (e) { /* storage may be blocked */ }
+    }
+
+    function exists(id) {
+      if (!id) return false;
+      if (id.startsWith("pl-")) return placements.some((p) => p.pid === id);
+      return buildings.has(id) && !removed.has(id);
+    }
+
+    function afterChange() {
+      rebuildBuildings();
+      rebuildPlacements();
+      if (!exists(selected)) selected = null;
+      updateHighlight();
+      save();
+      updateUI();
+    }
+
+    // Every edit goes through here so it can be undone.
+    function mutate(fn) {
+      history.push(JSON.stringify(serialize()));
+      if (history.length > 60) history.shift();
+      fn();
+      afterChange();
+    }
+
+    function undo() {
+      const snap = history.pop();
+      if (!snap) return toast("Nothing to undo");
+      applyState(JSON.parse(snap));
+      afterChange();
+      toast("Undone");
+    }
+
+    function removeBuilding(id) {
+      if (id.startsWith("custom-")) buildings.delete(id);
+      else removed.add(id);
+    }
+
+    // ---- selection highlight ----
+    let highlight = null;
+    function updateHighlight() {
+      if (highlight) {
+        scene.remove(highlight);
+        highlight.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+        highlight = null;
+      }
+      if (!selected) return;
+      if (selected.startsWith("pl-")) {
+        const h = placementGroup.children.find((c) => c.userData.pid === selected);
+        if (h) { highlight = new THREE.BoxHelper(h, 0xffa500); scene.add(highlight); }
+      } else {
+        const b = buildings.get(selected);
+        const geo = b && buildExtrusion(b.footprint, b.height + 0.3, b.minHeight || 0);
+        if (geo) {
+          highlight = new THREE.Group();
+          highlight.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+            color: 0xffa500, transparent: true, opacity: 0.35, depthWrite: false,
+            polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, side: THREE.DoubleSide
+          })));
+          highlight.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: 0xff8800 })));
+          scene.add(highlight);
+        }
+      }
+    }
+
+    // ---- picking (from the crosshair) ----
+    const raycaster = new THREE.Raycaster();
+    raycaster.far = 1000;
+
+    function pick() {
+      raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+      const hit = raycaster.intersectObjects([...buildingMeshes, placementGroup], true)[0];
+      if (!hit) return null;
+      if (hit.object.userData.owners) return hit.object.userData.owners[hit.faceIndex] || null;
+      let o = hit.object;
+      while (o && !o.userData.pid) o = o.parent;
+      return o ? o.userData.pid : null;
+    }
+
+    function groundPoint() {
+      raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+      const pt = new THREE.Vector3();
+      const hit = raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), pt);
+      return hit && pt.distanceTo(camera.position) < 1500 ? pt : null;
+    }
+
+    // camera heading snapped to 15 degrees, as a rotation usable for both models and footprints
+    function cameraHeading() {
+      const d = camera.getWorldDirection(new THREE.Vector3());
+      const step = Math.PI / 12;
+      return Math.round(Math.atan2(-d.z, d.x) / step) * step;
+    }
+
+    // ---- actions ----
+    const hexOf = (css) => parseInt(css.slice(1), 16);
+
+    function deleteSelected() {
+      if (!selected) return toast("Nothing selected - click a building while looking at it");
+      mutate(() => {
+        if (selected.startsWith("pl-")) placements = placements.filter((p) => p.pid !== selected);
+        else removeBuilding(selected);
+        selected = null;
+      });
+    }
+
+    function replaceWithModel() {
+      const name = $("modelSelect").value;
+      const m = modelLib.get(name);
+      if (!m) return toast("Load a .glb file first");
+      if (!selected || selected.startsWith("pl-")) return toast("Select a building first");
+      const b = buildings.get(selected);
+      const info = footprintInfo(b.footprint);
+      const s = computeScale(m.size, info, $("fitMode").value, +$("modelHeight").value);
+      mutate(() => {
+        removeBuilding(b.id);
+        const p = { pid: newId("pl"), modelName: name, x: info.x, z: info.z, rotY: info.rotY, ...s, replaces: b.id };
+        placements.push(p);
+        selected = p.pid;
+      });
+    }
+
+    function makeBlockRecord(footprint) {
+      const wall = hexOf($("blockColor").value);
+      return {
+        id: newId("custom"),
+        footprint,
+        height: Math.max(3, +$("blockHeight").value || 24),
+        minHeight: 0,
+        wallColor: wall,
+        roofColor: new THREE.Color(wall).multiplyScalar(0.7).getHex(),
+        glass: $("blockGlass").checked
+      };
+    }
+
+    function replaceWithBlock() {
+      if (!selected || selected.startsWith("pl-")) return toast("Select a building first");
+      const old = buildings.get(selected);
+      mutate(() => {
+        removeBuilding(old.id);
+        const rec = makeBlockRecord(old.footprint.map((p) => [p[0], p[1]]));
+        buildings.set(rec.id, rec);
+        selected = rec.id;
+      });
+    }
+
+    function placeModel() {
+      const m = modelLib.get($("modelSelect").value);
+      if (!m) return toast("Load a .glb file first");
+      const pt = groundPoint();
+      if (!pt) return toast("Look down at the ground to place a model");
+      const s = computeScale(m.size, null, "keep", +$("modelHeight").value);
+      mutate(() => {
+        const p = { pid: newId("pl"), modelName: $("modelSelect").value, x: pt.x, z: pt.z, rotY: cameraHeading(), ...s, replaces: null };
+        placements.push(p);
+        selected = p.pid;
+      });
+    }
+
+    function placeBlock() {
+      const pt = groundPoint();
+      if (!pt) return toast("Look down at the ground to place a block");
+      const half = Math.max(4, +$("blockSize").value || 20) / 2;
+      const ang = cameraHeading(), c = Math.cos(ang), s = Math.sin(ang);
+      const cx = pt.x, cn = -pt.z;   // local coords: x east, y north
+      const fp = [[-half, -half], [half, -half], [half, half], [-half, half]]
+        .map(([u, v]) => [cx + u * c - v * s, cn + u * s + v * c]);
+      mutate(() => {
+        const rec = makeBlockRecord(fp);
+        buildings.set(rec.id, rec);
+        selected = rec.id;
+      });
+    }
+
+    function rotateSelected(dir) {
+      if (!selected || !selected.startsWith("pl-")) return toast("Select a placed model to rotate it");
+      mutate(() => { placements.find((p) => p.pid === selected).rotY += dir * Math.PI / 2; });
+    }
+
+    function adjustHeight(dir) {
+      if (!selected) return toast("Select a placed model or custom block first");
+      if (selected.startsWith("pl-")) {
+        mutate(() => { placements.find((p) => p.pid === selected).sy *= dir > 0 ? 1.1 : 1 / 1.1; });
+      } else if (selected.startsWith("custom-")) {
+        mutate(() => { const b = buildings.get(selected); b.height = Math.max(3, b.height + dir * 2); });
+      } else {
+        toast("Replace this building with a block first, then adjust its height");
+      }
+    }
+
+    // ---- layout import / export ----
+    function exportLayout() {
+      const data = { version: 1, center: [centerLat, centerLng], radius: radiusMeters, ...serialize() };
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: "application/json" }));
+      a.download = "waypoint-layout.json";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+    }
+
+    async function importLayout(file) {
+      try {
+        const data = JSON.parse(await file.text());
+        mutate(() => applyState(data));
+        toast("Layout imported");
+      } catch (e) {
+        toast("Couldn't read that layout file");
+      }
+    }
+
+    // ---- panel text ----
+    function updateUI() {
+      let txt = "Nothing selected - click while looking at a building.";
+      if (selected && selected.startsWith("pl-")) {
+        const p = placements.find((q) => q.pid === selected);
+        if (p) txt = `Placed model: ${p.modelName}`;
+      } else if (selected) {
+        const b = buildings.get(selected);
+        if (b) txt = `${b.id.startsWith("custom-") ? "Custom block" : "OSM building " + b.id.slice(4)} · ${b.height.toFixed(0)} m tall`;
+      }
+      $("sel").textContent = txt;
+
+      const customs = [...buildings.keys()].filter((id) => id.startsWith("custom-")).length;
+      $("counts").textContent = `${buildings.size - customs} OSM buildings · ${removed.size} removed · ${customs} custom · ${placements.length} models`;
+
+      const waiting = {};
+      for (const p of placements) if (!modelLib.has(p.modelName)) waiting[p.modelName] = (waiting[p.modelName] || 0) + 1;
+      const names = Object.keys(waiting);
+      $("pending").textContent = names.length
+        ? "Waiting for model file(s): " + names.map((n) => `${n} (${waiting[n]})`).join(", ")
+        : "";
+    }
+
+    // ---- panel wiring ----
+    $("btnDelete").onclick = deleteSelected;
+    $("btnUndo").onclick = undo;
+    $("btnReplaceModel").onclick = replaceWithModel;
+    $("btnPlaceModel").onclick = placeModel;
+    $("btnReplaceBlock").onclick = replaceWithBlock;
+    $("btnPlaceBlock").onclick = placeBlock;
+    $("btnExport").onclick = exportLayout;
+    $("btnImport").onclick = () => $("importFile").click();
+    $("importFile").addEventListener("change", (e) => { if (e.target.files[0]) importLayout(e.target.files[0]); e.target.value = ""; });
+    $("btnReset").onclick = () => mutate(() => { removed = new Set(); placements = []; applyState({}); selected = null; });
+    $("modelFile").addEventListener("change", async (e) => {
+      for (const f of e.target.files) {
+        try { await addModelFile(f); } catch (err) { console.error(err); toast("Couldn't read " + f.name); }
+      }
+      e.target.value = "";
+    });
+
+    // ---- start-up: restore autosaved edits, then fetch the map ----
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) applyState(JSON.parse(saved));
+    } catch (e) { /* ignore */ }
+    rebuildBuildings();   // shows saved custom blocks immediately
+    rebuildPlacements();
+    updateUI();
+
     // Buildings first (so they show up quickly), then the ground details
     loadBuildings()
       .catch((err) => console.error("Could not load buildings:", err))
@@ -569,10 +1095,19 @@
       .catch((err) => console.error("Could not load roads/parks/trees:", err));
 
     // =====================================================================
-    // 7. Flycam controls (Minecraft-creative style)
+    // 8. Flycam controls (Minecraft-creative style) + edit shortcuts
     // =====================================================================
     const controls = new PointerLockControls(camera, renderer.domElement);
-    document.addEventListener("click", () => controls.lock());
+
+    // Click: first click captures the mouse; later clicks select what the crosshair is on.
+    document.addEventListener("click", (e) => {
+      if (e.target.closest("#ui, #backLink")) return;
+      if (!controls.isLocked) { controls.lock(); return; }
+      selected = pick();
+      updateHighlight();
+      updateUI();
+    });
+    controls.addEventListener("lock", () => { if (document.activeElement) document.activeElement.blur(); });
 
     const move = { forward: false, back: false, left: false, right: false, up: false, down: false };
     const velocity = new THREE.Vector3();
@@ -586,6 +1121,20 @@
         case "KeyD": move.right = true; break;
         case "Space": move.up = true; break;
         case "ShiftLeft": move.down = true; break;
+      }
+      // edit shortcuts only work while looking around (so typing in the panel is safe)
+      if (!controls.isLocked || e.ctrlKey || e.metaKey || e.altKey) return;
+      switch (e.code) {
+        case "KeyX": case "Delete": deleteSelected(); break;
+        case "KeyR": replaceWithModel(); break;
+        case "KeyB": replaceWithBlock(); break;
+        case "KeyP": placeModel(); break;
+        case "KeyN": placeBlock(); break;
+        case "KeyQ": rotateSelected(-1); break;
+        case "KeyE": rotateSelected(1); break;
+        case "BracketRight": adjustHeight(1); break;
+        case "BracketLeft": adjustHeight(-1); break;
+        case "KeyZ": undo(); break;
       }
     });
     document.addEventListener("keyup", (e) => {
@@ -634,6 +1183,12 @@
 
     // Handy for debugging from the console
     window.__scene = { scene, camera, renderer };
+    window.__wp = {
+      buildings, pick, addModelFile, undo,
+      state: () => ({ selected, removed: [...removed], placements }),
+      select: (id) => { selected = id; updateHighlight(); updateUI(); },
+      actions: { deleteSelected, replaceWithModel, replaceWithBlock, placeModel, placeBlock, rotateSelected, adjustHeight }
+    };
   </script>
 </body>
 </html>
