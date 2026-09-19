@@ -61,6 +61,16 @@
     }
     #attribution a { color: #fff; text-decoration: none; }
     #attribution a:hover { text-decoration: underline; }
+
+    .model-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 6px 0; }
+    .model-thumb {
+      display: flex; flex-direction: column; align-items: center; cursor: pointer;
+      border: 2px solid transparent; border-radius: 8px; padding: 4px; background: #f4f8fb;
+    }
+    .model-thumb:hover { background: #eaf1f7; }
+    .model-thumb.active { border-color: #1d8fe1; background: #eaf4fc; }
+    .model-thumb canvas { width: 100%; aspect-ratio: 1; border-radius: 6px; display: block; }
+    .model-thumb span { font-size: 11px; margin-top: 4px; text-align: center; word-break: break-word; line-height: 1.2; }
   </style>
 </head>
 <body>
@@ -78,25 +88,14 @@
 
     <h3>3D model (.glb)</h3>
     <input type="file" id="modelFile" accept=".glb,.gltf" multiple>
-    <label>Active model <select id="modelSelect"><option value="">(none loaded)</option></select></label>
-    <label>Fit
-      <select id="fitMode">
-        <option value="uniform">Fit footprint (keep shape)</option>
-        <option value="stretch">Stretch to footprint</option>
-        <option value="keep">Keep original size</option>
-      </select>
-    </label>
+    <div id="modelGrid" class="model-grid"></div>
     <label>Height (m, 0 = auto) <input type="number" id="modelHeight" value="0" min="0" step="1"></label>
     <button id="btnReplaceModel">Replace selected with model <kbd>R</kbd></button>
     <button id="btnPlaceModel">Place model at crosshair <kbd>P</kbd></button>
 
-    <h3>Layout</h3>
-    <div class="row">
-      <button id="btnExport" class="secondary">Export</button>
-      <button id="btnImport" class="secondary">Import</button>
-      <button id="btnReset" class="secondary">Reset</button>
-    </div>
-    <input type="file" id="importFile" accept=".json" style="display:none">
+<h3>AI styling</h3>
+<button id="btnStyleAI" class="secondary">Style nearby buildings with AI</button>
+
     <div class="note" id="counts" style="margin-top:8px"></div>
     <div id="pending"></div>
     <div class="note" style="margin-top:8px">Edits autosave in this browser. Press Esc to free the mouse before using the panel. Model files are not saved &mdash; re-select them after a reload and placements reappear.</div>
@@ -134,7 +133,7 @@
     // =====================================================================
     // 1. Read the selection passed in from the picker
     // =====================================================================
-    console.log("explorer.html v5.5 (satellite ground, detailed buildings, sturdier map-data loading)");
+    console.log("explorer.html v5.6 (model thumbnail grid)");
     const params = new URLSearchParams(window.location.search);
     let centerLat = parseFloat(params.get("lat"));
     let centerLng = parseFloat(params.get("lng"));
@@ -1995,6 +1994,52 @@
     const gltfLoader = new GLTFLoader();
     const modelLib = new Map(); // file name -> { root, size, offset }
 
+    let activeModelName = "";
+    const thumbnails = new Map();   // file name -> { renderer, scene, camera, holder }
+
+    function setActiveModel(name) {
+      activeModelName = name;
+      document.querySelectorAll(".model-thumb").forEach((el) => el.classList.toggle("active", el.dataset.name === name));
+    }
+
+    function addThumbnail(name, m) {
+      const cell = document.createElement("div");
+      cell.className = "model-thumb";
+      cell.dataset.name = name;
+      const canvas = document.createElement("canvas");
+      canvas.width = 128; canvas.height = 128;
+      const label = document.createElement("span");
+      label.textContent = name;
+      cell.append(canvas, label);
+      cell.addEventListener("click", () => setActiveModel(name));
+      $("modelGrid").appendChild(cell);
+
+      const tScene = new THREE.Scene();
+      tScene.add(new THREE.HemisphereLight(0xffffff, 0x888888, 1.1));
+      const tLight = new THREE.DirectionalLight(0xffffff, 1.4);
+      tLight.position.set(3, 5, 4);
+      tScene.add(tLight);
+
+      const mesh = m.root.clone(true);
+      mesh.position.copy(m.offset);
+      const holder = new THREE.Group();
+      holder.add(mesh);
+      tScene.add(holder);
+
+      const maxDim = Math.max(m.size.x, m.size.y, m.size.z, 0.01);
+      const dist = maxDim * 1.8;
+      const tCam = new THREE.PerspectiveCamera(35, 1, 0.05, maxDim * 20);
+      tCam.position.set(dist * 0.7, m.size.y * 0.6 + dist * 0.35, dist * 0.7);
+      tCam.lookAt(0, m.size.y * 0.4, 0);
+
+      const tRenderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+      tRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      tRenderer.setSize(128, 128, false);
+      tRenderer.setClearColor(0x000000, 0);
+
+      thumbnails.set(name, { renderer: tRenderer, scene: tScene, camera: tCam, holder });
+    }
+
     async function addModelFile(file) {
       const buf = await file.arrayBuffer();
       const gltf = await gltfLoader.parseAsync(buf, "");
@@ -2015,24 +2060,12 @@
       // offset: puts the model's footprint centre at the origin and its base on y = 0
       modelLib.set(file.name, { root, size, offset: new THREE.Vector3(-c.x, -box.min.y, -c.z) });
 
-      refreshModelSelect(file.name);
+      addThumbnail(file.name, modelLib.get(file.name));
+      setActiveModel(file.name);
       rebuildPlacements();      // placements that were waiting for this file appear now
       updateHighlight();
       updateUI();
       toast(`Loaded ${file.name} (${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)} m)`);
-    }
-
-    function refreshModelSelect(activeName) {
-      const sel = $("modelSelect");
-      const current = activeName || sel.value;
-      sel.innerHTML = "";
-      if (!modelLib.size) sel.innerHTML = '<option value="">(none loaded)</option>';
-      for (const name of modelLib.keys()) {
-        const o = document.createElement("option");
-        o.value = o.textContent = name;
-        sel.appendChild(o);
-      }
-      if (modelLib.has(current)) sel.value = current;
     }
 
     function computeScale(size, info, mode, heightOverride) {
@@ -2210,29 +2243,28 @@
     }
 
     function replaceWithModel() {
-      const name = $("modelSelect").value;
-      const m = modelLib.get(name);
-      if (!m) return toast("Load a .glb file first");
+      const m = modelLib.get(activeModelName);
+      if (!m) return toast("Load and select a model first");
       if (!selected || selected.startsWith("pl-")) return toast("Select a building first");
       const b = buildings.get(selected);
       const info = footprintInfo(b.footprint);
-      const s = computeScale(m.size, info, $("fitMode").value, +$("modelHeight").value);
+      const s = computeScale(m.size, info, "uniform", +$("modelHeight").value);
       mutate(() => {
         removeBuilding(b.id);
-        const p = { pid: newId("pl"), modelName: name, x: info.x, z: info.z, rotY: info.rotY, ...s, replaces: b.id };
+        const p = { pid: newId("pl"), modelName: activeModelName, x: info.x, z: info.z, rotY: info.rotY, ...s, replaces: b.id };
         placements.push(p);
         selected = p.pid;
       });
     }
 
     function placeModel() {
-      const m = modelLib.get($("modelSelect").value);
-      if (!m) return toast("Load a .glb file first");
+      const m = modelLib.get(activeModelName);
+      if (!m) return toast("Load and select a model first");
       const pt = groundPoint();
       if (!pt) return toast("Look down at the ground to place a model");
       const s = computeScale(m.size, null, "keep", +$("modelHeight").value);
       mutate(() => {
-        const p = { pid: newId("pl"), modelName: $("modelSelect").value, x: pt.x, z: pt.z, rotY: cameraHeading(), ...s, replaces: null };
+        const p = { pid: newId("pl"), modelName: activeModelName, x: pt.x, z: pt.z, rotY: cameraHeading(), ...s, replaces: null };
         placements.push(p);
         selected = p.pid;
       });
@@ -2251,26 +2283,6 @@
         mutate(() => { const b = buildings.get(selected); b.height = Math.max(3, b.height + dir * 2); });
       } else {
         toast("Select a placed model to change its height");
-      }
-    }
-
-    // ---- layout import / export ----
-    function exportLayout() {
-      const data = { version: 1, center: [centerLat, centerLng], radius: radiusMeters, ...serialize() };
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: "application/json" }));
-      a.download = "waypoint-layout.json";
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1500);
-    }
-
-    async function importLayout(file) {
-      try {
-        const data = JSON.parse(await file.text());
-        mutate(() => applyState(data));
-        toast("Layout imported");
-      } catch (e) {
-        toast("Couldn't read that layout file");
       }
     }
 
@@ -2309,10 +2321,7 @@
 };
     $("btnReplaceModel").onclick = replaceWithModel;
     $("btnPlaceModel").onclick = placeModel;
-    $("btnExport").onclick = exportLayout;
-    $("btnImport").onclick = () => $("importFile").click();
-    $("importFile").addEventListener("change", (e) => { if (e.target.files[0]) importLayout(e.target.files[0]); e.target.value = ""; });
-    $("btnReset").onclick = () => mutate(() => { removed = new Set(); placements = []; applyState({}); selected = null; });
+    $("btnStyleAI").onclick = () => styleBuildingsWithAI(10, 2);
     $("modelFile").addEventListener("change", async (e) => {
       for (const f of e.target.files) {
         try { await addModelFile(f); } catch (err) { console.error(err); toast("Couldn't read " + f.name); }
@@ -2466,8 +2475,61 @@
       const angularWidthDeg = (2 * Math.atan(targetRadius / Math.max(distance, 1)) * 180) / Math.PI;
       const widthFrac = angularWidthDeg / CAMERA_FOV_DEG;
 
-      return { distance, offsetDeg, visible, xFrac, widthFrac, camLat, camLng };
+        return { distance, offsetDeg, visible, xFrac, widthFrac, camLat, camLng };
     }
+
+    async function findFramedPhoto(lat, lng, targetRadius) {
+      const attempts = [0.002, 0.006, 0.015, 0.03];
+      for (const degBox of attempts) {
+        const results = await searchMapillary(lat, lng, degBox);
+        if (!results.length) continue;
+        const scored = results.map((r) => ({ photo: r, framing: computeFraming(r, lat, lng, targetRadius) }));
+        const framed = scored.filter((s) => s.framing.visible);
+        const pool = framed.length ? framed : scored;
+        pool.sort((a, b) => {
+          const diff = Math.abs(a.framing.offsetDeg) - Math.abs(b.framing.offsetDeg);
+          return Math.abs(diff) > 5 ? diff : a.framing.distance - b.framing.distance;
+        });
+        return { ...pool[0].photo, framing: pool[0].framing, wasFramed: framed.length > 0 };
+      }
+      return null;
+    }
+    window.findFramedPhoto = findFramedPhoto;
+
+    // Picks up to `maxPhotos` photos of the building, spread across different sides where possible.
+    async function findMultiSidePhotos(lat, lng, targetRadius, maxPhotos = 3) {
+      const attempts = [0.006, 0.015, 0.03];
+      let candidates = [];
+      for (const degBox of attempts) {
+        const results = await searchMapillary(lat, lng, degBox);
+        candidates = results.map((r) => ({ photo: r, framing: computeFraming(r, lat, lng, targetRadius) }));
+        if (candidates.filter((c) => c.framing.visible).length >= maxPhotos) break;
+      }
+      if (!candidates.length) return [];
+
+      let pool = candidates.filter((c) => c.framing.visible);
+      if (!pool.length) pool = candidates;
+
+      pool.forEach((c) => {
+        c.viewingAngle = bearingDeg(lat, lng, c.framing.camLat, c.framing.camLng);
+      });
+      pool.sort((a, b) => Math.abs(a.framing.offsetDeg) - Math.abs(b.framing.offsetDeg));
+
+      const chosen = [];
+      for (const c of pool) {
+        if (chosen.length >= maxPhotos) break;
+        const tooClose = chosen.some((p) => Math.abs(angleDiff(c.viewingAngle, p.viewingAngle)) < 55);
+        if (!tooClose) chosen.push(c);
+      }
+      if (chosen.length < maxPhotos) {
+        for (const c of pool) {
+          if (chosen.length >= maxPhotos) break;
+          if (!chosen.includes(c)) chosen.push(c);
+        }
+      }
+      return chosen;
+    }
+    window.findMultiSidePhotos = findMultiSidePhotos;
 
         // =====================================================================
     // 7.7 "See it for real" preview: real photo + rendered cutout, layered with CSS
@@ -2581,10 +2643,116 @@
   closeBtn.style.cssText = "padding:8px 16px; border:0; border-radius:8px; background:#1d8fe1; color:#fff; font-weight:600; cursor:pointer;";
   closeBtn.onclick = closePreview;
 
-  wrap.append(stage, info, controlsBox, closeBtn);
+    wrap.append(stage, info, controlsBox, closeBtn);
   document.body.appendChild(wrap);
 }
 window.previewReal = previewReal;
+
+    // =====================================================================
+    // 7.8 AI-styled buildings: vision model reads real photos per building and
+    //     overrides wall/roof colour and material, instead of guessing from OSM tags.
+    //     Low-confidence or missing photos leave the building exactly as it was
+    //     (no regression) - this is the "messy real-world data" fallback path.
+    // =====================================================================
+    async function withRetry(fn, tries = 4) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const rateLimited = /HTTP 429|HTTP 500|HTTP 503/.test(err.message);
+      if (!rateLimited || i === tries - 1) throw err;
+      const wait = 1000 * Math.pow(2, i) + Math.random() * 500;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+}
+    async function analyzeBuildingStyle(photoUrls) {
+      const prompt = `You are looking at ${photoUrls.length} street photo(s) of the same building, taken from different angles/sides. ` +
+        'Synthesize an overall exterior style for the WHOLE building, not just what one photo shows. ' +
+        'Return ONLY compact JSON, no markdown, no explanation: ' +
+        '{"wallColor":"#rrggbb","roofColor":"#rrggbb","material":"brick|concrete|glass|stone|wood|stucco|other","glass":true|false,"confidence":0.0}. ' +
+        'If the images are unclear or do not show a building facade, set confidence to 0.';
+
+      const res = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${OPENAI_API_KEY}` },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: [
+            { type: "text", text: prompt },
+            ...photoUrls.map((url) => ({ type: "image_url", image_url: { url } }))
+          ]}],
+          max_tokens: 200,
+          temperature: 0
+        })
+      });
+      if (!res.ok) throw new Error("OpenAI HTTP " + res.status);
+      const json = await res.json();
+      const text = json.choices?.[0]?.message?.content || "";
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error("No JSON in vision response");
+      return JSON.parse(match[0]);
+    }
+
+    async function styleBuildingsWithAI(maxBuildings = 40, concurrency = 4) {
+      if (typeof OPENAI_API_KEY === "undefined" || !OPENAI_API_KEY) {
+        toast("No OPENAI_API_KEY in config.js - add it to use AI styling");
+        return;
+      }
+      const items = [...buildings.values()]
+        .filter((b) => b.id.startsWith("osm-"))
+        .map((b) => {
+          const info = footprintInfo(b.footprint);
+          return { b, info, dist: Math.hypot(info.x, info.z) };
+        })
+        .sort((p, q) => p.dist - q.dist)
+        .slice(0, maxBuildings);
+
+      if (!items.length) return toast("No buildings loaded yet");
+      toast(`Styling ${items.length} nearby buildings with AI...`);
+
+      let done = 0, styled = 0, noPhoto = 0, lowConf = 0, failed = 0;
+      const queue = items.slice();
+
+            async function worker() {
+        while (queue.length) {
+          const it = queue.pop();
+          try {
+            const [lat, lng] = worldToLatLng(it.info.x, it.info.z);
+            const radius = Math.max(it.info.length, it.info.width) / 2;
+            const photos = await withRetry(() => findMultiSidePhotos(lat, lng, radius, 3));
+            if (!photos.length) { noPhoto++; }
+            else {
+              const style = await withRetry(() => analyzeBuildingStyle(photos.map((p) => p.photo.thumb_1024_url)));
+              if (style.confidence >= 0.5) {
+                if (style.wallColor) it.b.wallColor = parseInt(style.wallColor.replace("#", ""), 16);
+                if (style.roofColor) it.b.roofColor = parseInt(style.roofColor.replace("#", ""), 16);
+                if (typeof style.glass === "boolean") it.b.glass = style.glass;
+                it.b.aiStyled = true;
+                it.b.aiPhotoCount = photos.length;
+                styled++;
+              } else lowConf++;
+            }
+          } catch (err) {
+            console.warn("AI styling failed for", it.b.id, err);
+            failed++;
+          }
+          done++;
+          if (done % 4 === 0 || done === items.length) {
+            toast(`Styling: ${done}/${items.length} - ${styled} updated, ${noPhoto} no photo, ${lowConf} unsure, ${failed} failed`);
+          }
+        }
+      }
+
+      await Promise.all(Array.from({ length: concurrency }, worker));
+      rebuildBuildings();
+      updateHighlight();
+      updateUI();
+      toast(`Done: ${styled}/${items.length} buildings AI-styled (${noPhoto} had no clear photo)`);
+    }
+    window.styleBuildingsWithAI = styleBuildingsWithAI;
+    window.analyzeBuildingStyle = analyzeBuildingStyle;
+    window.findMultiSidePhotos = findMultiSidePhotos;
 
     // =====================================================================
     // 8. Flycam controls (Minecraft-creative style) + edit shortcuts
@@ -2627,7 +2795,7 @@ window.previewReal = previewReal;
       switch (e.code) {
         case "KeyX": case "Delete": deleteSelected(); break;
         case "KeyR": replaceWithModel(); break;
-        case "KeyB": replaceWithBlock(); break;
+        case "KeyV": if (selected) previewReal(selected); break;
         case "KeyP": placeModel(); break;
         case "KeyQ": rotateSelected(-1); break;
         case "KeyE": rotateSelected(1); break;
@@ -2676,6 +2844,11 @@ window.previewReal = previewReal;
 
       sky.position.copy(camera.position);
       renderer.render(scene, camera);
+
+      thumbnails.forEach((t) => {
+        t.holder.rotation.y += delta * 0.6;
+        t.renderer.render(t.scene, t.camera);
+      });
     }
     animate();
 
