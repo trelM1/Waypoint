@@ -10,11 +10,24 @@
 import express from "express";
 import pg from "pg";
 import dotenv from "dotenv";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 dotenv.config();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Be forgiving if the key was pasted into .env as JavaScript (const OPENAI_API_KEY = "sk-...";): use it, but say how to tidy it.
+if (!process.env.OPENAI_API_KEY) {
+  try {
+    const txt = fs.readFileSync(path.join(__dirname, ".env"), "utf8");
+    const m = txt.match(/^\s*(?:const\s+|let\s+|export\s+)?OPENAI_API_KEY\s*[=:]\s*["'`]?\s*(sk-[^"'`\s;,]+)/m);
+    if (m) {
+      process.env.OPENAI_API_KEY = m[1];
+      console.warn('Note: OPENAI_API_KEY in .env is not in plain NAME=value form (it has const / quotes / a semicolon). Using it anyway - tidy it to:  OPENAI_API_KEY=sk-...');
+    }
+  } catch { /* no .env next to server.js */ }
+}
 
 // ---------- database ----------
 let DATABASE_URL = process.env.DATABASE_URL;
@@ -195,28 +208,34 @@ app.get("/api/recent", wrap(async (req, res) => {
   res.json(rows.map((r) => ({ ts: r.ts.toISOString(), scene: r.scene_key, action: r.action, label: r.label, session: r.session_id })));
 }));
 
-// ---------- AI: describe a building from a photo (Gemini) ----------
-// The browser sends a downscaled JPEG; we ask Gemini for a small JSON "look" (materials, colours, glazing...)
-// that explorer.html applies to the OSM building. The API key stays here on the server.
-const GEMINI_BASE = (process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com").replace(/\/+$/, "");
-const GEMINI_MODELS = (process.env.GEMINI_MODEL ? [process.env.GEMINI_MODEL] : ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]);
+// ---------- AI: restyle the buildings near the player (OpenAI) ----------
+// explorer.html sends the closest few buildings (name, size, a few OpenStreetMap tags); one OpenAI call returns a small JSON
+// "look" for each (materials, colours, glazing...) which the explorer applies. The API key stays here on the server.
+const OPENAI_BASE = (process.env.OPENAI_BASE_URL || "https://api.openai.com").replace(/\/+$/, "");
+const OPENAI_MODELS = process.env.OPENAI_MODEL ? [process.env.OPENAI_MODEL] : ["gpt-4o", "gpt-4o-mini"];   // the bigger model knows more real buildings
+const MAX_BUILDINGS = 12;
 
-const LOOK_PROMPT = (ctx) => `You are helping match a 3D model of a real building to a photo of it.
-Look at the building in the photo and describe its EXTERIOR only. ${ctx}
-Return ONLY a JSON object with exactly these keys:
-{
+const LOOK_KEYS = `{
   "material": one of "brick" | "concrete" | "glass" | "metal" | "stone" | "stucco" | "wood" | "mixed",
   "wallColor": main wall colour as "#rrggbb" (the wall surface itself, not glass, not sky),
-  "roofColor": roof colour as "#rrggbb" or null if the roof is not visible,
+  "roofColor": roof colour as "#rrggbb" or null if unknown,
   "glazing": fraction 0..1 of the facade area that is glass (0.1 = few small windows, 0.4 = big windows, 0.85 = glass curtain wall),
   "windowStyle": one of "punched" (separate window openings in a solid wall) | "ribbon" (continuous horizontal window bands) | "curtain" (almost fully glass) | "none",
   "windowTint": glass colour as "#rrggbb",
   "frameColor": window frame / mullion colour as "#rrggbb",
   "roofShape": one of "flat" | "gabled" | "hipped" | "dome" | "other" | null,
   "storeys": integer number of visible floors, or null if unsure,
-  "confidence": 0..1, how sure you are about this description,
+  "confidence": 0..1, how sure you are (0.2-0.5 when guessing, 0.7+ only when you clearly recognise the building),
   "notes": one short sentence
-}
+}`;
+
+const LOOK_PROMPT = (list) => `You are helping make a 3D map of the University of Waterloo / Kitchener-Waterloo area (Ontario, Canada) look like the real place.
+Below are buildings from OpenStreetMap. For EACH one, describe the EXTERIOR of the real building as you know it: use its name and location if you recognise it,
+otherwise infer the typical look from its type, size and tags (a plain guess is fine, with a low confidence).
+Buildings:
+${list.map((b) => JSON.stringify(b)).join("\n")}
+Return ONLY a JSON object of the form {"buildings": {"<id>": LOOK, ...}} with one LOOK for every id above, where LOOK is exactly:
+${LOOK_KEYS}
 No markdown, no commentary, JSON only.`;
 
 const hex = (v) => (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v.trim()) ? v.trim().toLowerCase() : null);
@@ -249,50 +268,55 @@ function parseJsonLoose(text) {
   return null;
 }
 
-app.post("/api/describe-building", wrap(async (req, res) => {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) return res.status(503).json({ error: "GEMINI_API_KEY is not set in .env (get one free at https://aistudio.google.com/apikey), then restart the server." });
-  const { image, mime, context } = req.body || {};
-  if (typeof image !== "string" || !image.length) return res.status(400).json({ error: "image (base64) is required" });
-  const type = typeof mime === "string" && /^image\/(jpeg|png|webp)$/.test(mime) ? mime : "image/jpeg";
-  const b64 = image.replace(/^data:[^,]+,/, "");
-  if (!/^[A-Za-z0-9+/=\s]+$/.test(b64) || b64.length > 4_000_000) return res.status(400).json({ error: "image is not valid base64 or is too large" });
-  const c = isObj(context) ? context : {};
-  const bits = [];
-  if (typeof c.name === "string" && c.name) bits.push(`It is called "${c.name.slice(0, 80)}".`);
-  if (typeof c.type === "string" && c.type) bits.push(`OpenStreetMap type: ${c.type.slice(0, 40)}.`);
-  if (Number.isFinite(c.heightMetres)) bits.push(`It is about ${Math.round(c.heightMetres)} m tall.`);
-  const body = {
-    contents: [{ role: "user", parts: [{ text: LOOK_PROMPT(bits.join(" ")) }, { inline_data: { mime_type: type, data: b64 } }] }],
-    generationConfig: { temperature: 0.2, responseMimeType: "application/json", maxOutputTokens: 600 }
-  };
+const shortStr = (v, n) => (typeof v === "string" ? v.slice(0, n) : undefined);
+
+app.post("/api/restyle-nearby", wrap(async (req, res) => {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return res.status(503).json({ error: "OPENAI_API_KEY is not set in .env (create one at https://platform.openai.com/api-keys), then restart the server." });
+  const input = Array.isArray(req.body?.buildings) ? req.body.buildings.slice(0, MAX_BUILDINGS) : [];
+  const list = [];
+  for (const b of input) {
+    if (!isObj(b) || typeof b.id !== "string" || !/^[\w-]{1,40}$/.test(b.id)) continue;
+    const tags = {};
+    if (isObj(b.tags)) for (const [k, v] of Object.entries(b.tags).slice(0, 14)) if (/^[a-z:_]{1,30}$/.test(k) && typeof v === "string" && v.length <= 60) tags[k] = v;
+    list.push({ id: b.id, name: shortStr(b.name, 80) || null, type: shortStr(b.type, 40) || null,
+      heightMetres: Number.isFinite(b.heightMetres) ? Math.round(b.heightMetres) : null,
+      footprintM2: Number.isFinite(b.areaM2) ? Math.round(b.areaM2) : null, tags });
+  }
+  if (!list.length) return res.status(400).json({ error: "buildings (a non-empty list) is required" });
+  const messages = [{ role: "user", content: LOOK_PROMPT(list) }];
 
   let lastErr = "no model tried";
-  for (const model of GEMINI_MODELS) {
+  for (const model of OPENAI_MODELS) {
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 40000);
+    const timer = setTimeout(() => ctl.abort(), 60000);
     try {
-      const r = await fetch(`${GEMINI_BASE}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      const r = await fetch(`${OPENAI_BASE}/v1/chat/completions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify(body),
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model, messages, response_format: { type: "json_object" }, max_completion_tokens: 4000 }),
         signal: ctl.signal
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        lastErr = `Gemini error ${r.status}: ${data?.error?.message || r.statusText}`;
-        if (r.status === 404 || r.status === 400 && /model/i.test(lastErr)) continue;   // model name not available to this key: try the next one
+        const msg = data?.error?.message || r.statusText;
+        lastErr = `OpenAI error ${r.status}: ${msg}`;
+        if (r.status === 401) lastErr = "OpenAI rejected the API key (401). Check OPENAI_API_KEY in .env.";
+        if (r.status === 429 && /quota|billing/i.test(msg)) lastErr = "OpenAI says this key has no credit left (429). Add billing/credit at platform.openai.com.";
+        if (r.status === 404 || (r.status === 400 && /model/i.test(msg))) continue;   // model name not available to this key: try the next one
         return res.status(502).json({ error: lastErr });
       }
-      const text = (data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
-      const look = cleanLook(parseJsonLoose(text));
-      if (!look) {
-        const why = data?.promptFeedback?.blockReason || data?.candidates?.[0]?.finishReason || "unreadable answer";
-        return res.status(502).json({ error: `Gemini did not return a usable description (${why}). Try another photo.` });
+      const parsed = parseJsonLoose(data?.choices?.[0]?.message?.content || "");
+      const map = isObj(parsed?.buildings) ? parsed.buildings : isObj(parsed) ? parsed : {};
+      const looks = {};
+      for (const b of list) { const l = cleanLook(map[b.id]); if (l) looks[b.id] = l; }
+      if (!Object.keys(looks).length) {
+        const why = data?.choices?.[0]?.message?.refusal || data?.choices?.[0]?.finish_reason || "unreadable answer";
+        return res.status(502).json({ error: `OpenAI did not return usable descriptions (${why}). Try again.` });
       }
-      return res.json({ look, model });
+      return res.json({ looks, model });
     } catch (e) {
-      lastErr = e.name === "AbortError" ? "Gemini timed out" : "Could not reach Gemini: " + e.message;
+      lastErr = e.name === "AbortError" ? "OpenAI timed out" : "Could not reach OpenAI: " + e.message;
     } finally { clearTimeout(timer); }
   }
   res.status(502).json({ error: lastErr });
@@ -313,5 +337,8 @@ const HOST = process.env.HOST || "127.0.0.1";   // set HOST=0.0.0.0 to let other
 initSchema()
   .then(() => app.listen(PORT, HOST, () => {
     console.log(`Waypoint server ready: http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}  (database connected${hasTimescale ? ", TimescaleDB hypertable on" : ", plain Postgres"})`);
+    console.log(process.env.OPENAI_API_KEY
+      ? "OpenAI key: found (AI restyle is ready)"
+      : `OpenAI key: NOT FOUND - add a line  OPENAI_API_KEY=sk-...  to ${path.join(process.cwd(), ".env")}  (no 'const', no quotes), save, and restart.`);
   }))
   .catch((err) => { console.error("Could not connect to / set up the database:", err.message); process.exit(1); });

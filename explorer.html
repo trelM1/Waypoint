@@ -123,6 +123,13 @@
     #ui .file svg { flex: none; }
     #ui .file .ftext { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #ui .file.has { border-style: solid; border-color: #b9dcf5; color: var(--ink); background: #f2f9fe; }
+    #modelPreview { display: none; margin: 0 0 10px; border-radius: 12px; overflow: hidden; position: relative;
+      background: radial-gradient(120% 90% at 50% 20%, #f4f9fe 0%, #dbe8f4 100%); border: 1px solid #d3e2ef; }
+    #modelPreview.on { display: block; }
+    #modelPreview canvas { display: block; width: 100%; height: 150px; }
+    #modelPreview .cap { position: absolute; left: 10px; right: 10px; bottom: 7px; display: flex; justify-content: space-between; gap: 8px;
+      font-size: 11px; color: #4a5b6b; pointer-events: none; }
+    #modelPreview .cap span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #pending { margin-top: 8px; color: #b45309; font-size: 11.5px; }
 
     /* ---------- edit history ---------- */
@@ -198,6 +205,7 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>
           <span class="ftext">Choose .glb file(s)</span>
         </label>
+        <div id="modelPreview"><canvas id="modelPreviewCanvas"></canvas><div class="cap"><span id="mpName"></span><span id="mpSize"></span></div></div>
         <label class="field">Active model <select id="modelSelect"><option value="">(none loaded)</option></select></label>
         <label class="field">Fit
           <select id="fitMode">
@@ -212,17 +220,11 @@
       </div>
     </details>
 
-    <details class="sec">
-      <summary><span class="grow">Match a real building (AI)</span></summary>
+    <details class="sec" open>
+      <summary><span class="grow">Restyle with AI</span></summary>
       <div class="body">
-        <label class="file" id="styleFileLbl">
-          <input type="file" id="styleFile" accept="image/*">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M21 16l-5-5-8 8"/></svg>
-          <span class="ftext">Choose a photo of the building</span>
-        </label>
-        <button id="btnRestyle">Restyle selected from photo</button>
-        <button id="btnUnstyle" class="secondary">Remove AI look from selected</button>
-        <div class="note" id="styleNote" style="margin-top:8px">Select a building, choose a photo of it (a straight-on shot of one side works best), then restyle. Needs the server running.</div>
+        <button id="btnRestyle">Restyle nearest buildings (AI)</button>
+        <div class="note" id="styleNote" style="margin-top:8px">Restyles the 8 buildings closest to you (walls, windows, roof) using their names and map data. Press again for the next 8. Undo reverts it. Needs the server running.</div>
       </div>
     </details>
 
@@ -276,7 +278,7 @@
     // =====================================================================
     // 1. Read the selection passed in from the picker
     // =====================================================================
-    console.log("explorer.html v6.2 (live teammate sync; AI restyle from photo; edit log + Tiger Data sync;satellite ground, detailed buildings, sturdier map-data loading)");
+    console.log("explorer.html v6.5 (live teammate sync; one-click AI restyle of the nearest buildings; edit log + Tiger Data sync;satellite ground, detailed buildings, sturdier map-data loading)");
     const params = new URLSearchParams(window.location.search);
     let centerLat = parseFloat(params.get("lat"));
     let centerLng = parseFloat(params.get("lng"));
@@ -779,6 +781,13 @@
       garage: 0xbdbdbd, garages: 0xbdbdbd, yes: 0xd6d6d6
     };
 
+    const AI_TAGS = ["building", "building:material", "building:colour", "building:cladding", "building:levels", "roof:shape", "roof:material", "roof:colour", "amenity", "office", "operator", "addr:housenumber", "addr:street", "description"];
+    function pickOsmTags(tags) {
+      const o = {};
+      for (const k of AI_TAGS) if (typeof tags[k] === "string" && tags[k].length <= 60) o[k] = tags[k];
+      return o;
+    }
+
     function getWallColor(tags, height) {
       if (tags["building:colour"]) return new THREE.Color(tags["building:colour"]);
       const mat = tags["building:material"];
@@ -1198,7 +1207,7 @@
     function detailLayout(b) {
       const kind = b.kind || "yes";
       const minH = b.minHeight || 0;
-      const look = b.look || null;   // set by "Restyle from photo (AI)"
+      const look = b.look || null;   // set by "Restyle with AI"
       const floors = look && look.storeys
         ? Math.min(Math.max(look.storeys, 1), Math.max(1, Math.floor((b.height - minH) / 2.4)))
         : Math.max(1, Math.round((b.height - minH) / 3.1));
@@ -1627,7 +1636,8 @@
           minHeight: num(tags.min_height, 0),
           wallColor: getWallColor(tags, totalHeight).getHex(),
           roofColor: getRoofColor(tags).getHex(),
-          glass: isGlassBuilding(tags, totalHeight)
+          glass: isGlassBuilding(tags, totalHeight),
+          osm: pickOsmTags(tags)      // a few tags, sent to the AI so it can restyle without a photo
         });
       }
 
@@ -2196,6 +2206,60 @@
       toast(`Loaded ${file.name} (${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)} m)`);
     }
 
+    // ---- spinning preview of the active model (its own small renderer; only runs while visible) ----
+    const mp = { renderer: null, scene: null, cam: null, pivot: null, raf: 0, last: 0, name: "" };
+    function initModelPreview() {
+      if (mp.renderer) return true;
+      try {
+        const cv = $("modelPreviewCanvas");
+        mp.renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true });
+        mp.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        mp.renderer.setClearColor(0x000000, 0);
+        mp.scene = new THREE.Scene();
+        mp.scene.add(new THREE.HemisphereLight(0xffffff, 0x8fa3b5, 1.25));
+        const sun = new THREE.DirectionalLight(0xffffff, 1.9); sun.position.set(3, 5, 4); mp.scene.add(sun);
+        const fill = new THREE.DirectionalLight(0xbcd4ea, 0.6); fill.position.set(-4, 2, -3); mp.scene.add(fill);
+        mp.cam = new THREE.PerspectiveCamera(32, 2, 0.05, 5000);
+        mp.pivot = new THREE.Group(); mp.scene.add(mp.pivot);
+        return true;
+      } catch (err) { console.warn("Model preview unavailable:", err); return false; }
+    }
+    function showModelPreview(name) {
+      const box = $("modelPreview"), m = modelLib.get(name);
+      if (!m || !initModelPreview()) { box.classList.remove("on"); mp.name = ""; return; }
+      mp.name = name;
+      while (mp.pivot.children.length) mp.pivot.remove(mp.pivot.children[0]);
+      const inst = m.root.clone(true);
+      inst.position.copy(m.offset); inst.position.y -= m.size.y / 2;    // centre it on the spin axis
+      mp.pivot.add(inst);
+      const r = Math.max(0.5, Math.hypot(m.size.x, m.size.y, m.size.z) / 2);
+      const dist = r / Math.sin(THREE.MathUtils.degToRad(mp.cam.fov / 2)) * 0.9;
+      mp.cam.position.set(0, r * 0.45, dist); mp.cam.lookAt(0, 0, 0);
+      mp.cam.near = dist / 100; mp.cam.far = dist * 20; mp.cam.updateProjectionMatrix();
+      $("mpName").textContent = name;
+      $("mpSize").textContent = `${m.size.x.toFixed(1)} \u00d7 ${m.size.z.toFixed(1)} \u00d7 ${m.size.y.toFixed(1)} m`;
+      box.classList.add("on");
+      startModelPreview();
+    }
+    function startModelPreview() { if (!mp.raf && mp.name) mp.raf = requestAnimationFrame(modelPreviewTick); }
+    function modelPreviewTick(t) {
+      mp.raf = 0;
+      const det = $("modelPreview").closest("details");
+      if (!mp.name || document.hidden || (det && !det.open)) return;          // nothing to show: stop (restarted on toggle / new model)
+      mp.raf = requestAnimationFrame(modelPreviewTick);
+      if (t - mp.last < 33) return;                                            // ~30 fps (keeps spinning while the mouse is locked, too)
+      const dt = mp.last ? Math.min((t - mp.last) / 1000, 0.2) : 0; mp.last = t;
+      const cv = mp.renderer.domElement, w = cv.clientWidth, h = cv.clientHeight;
+      if (!w || !h) return;
+      if (cv.width !== Math.round(w * mp.renderer.getPixelRatio()) || cv.height !== Math.round(h * mp.renderer.getPixelRatio())) {
+        mp.renderer.setSize(w, h, false); mp.cam.aspect = w / h; mp.cam.updateProjectionMatrix();
+      }
+      mp.pivot.rotation.y += dt * 0.9;                                          // one turn about every 7 s
+      mp.renderer.render(mp.scene, mp.cam);
+    }
+    document.addEventListener("visibilitychange", startModelPreview);
+    $("modelPreview").closest("details").addEventListener("toggle", startModelPreview);
+
     function refreshModelSelect(activeName) {
       const sel = $("modelSelect");
       const current = activeName || sel.value;
@@ -2207,6 +2271,7 @@
         sel.appendChild(o);
       }
       if (modelLib.has(current)) sel.value = current;
+      showModelPreview(modelLib.has(sel.value) ? sel.value : "");
     }
 
     function computeScale(size, info, mode, heightOverride) {
@@ -2528,7 +2593,7 @@
     }
 
     // ---- Tiger Data sync (through server.js) ----
-    const API = (() => {
+    let API = (() => {
       const p = new URLSearchParams(location.search).get("api");
       if (p === "off") return null;
       if (p) return p.replace(/\/$/, "");
@@ -2760,18 +2825,10 @@
       }
     }
 
-    // ---- AI restyle: a photo of the real building -> Gemini (through server.js) -> wall colour, glazing, window style, roof ----
+    // ---- AI restyle: the closest buildings' names + map data -> OpenAI (through server.js) -> wall colour, glazing, window style, roof ----
     const setStyleNote = (msg) => { $("styleNote").textContent = msg || ""; };
     const HEX6 = /^#[0-9a-f]{6}$/i;
-
-    async function photoToJpegBase64(file, maxSide = 1024) {
-      const bmp = await createImageBitmap(file);
-      const k = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
-      const c = document.createElement("canvas");
-      c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
-      c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
-      return c.toDataURL("image/jpeg", 0.85).split(",")[1];
-    }
+    const RESTYLE_COUNT = 8, MIN_RESTYLE_AREA = 40;   // skip sheds and garages smaller than this (m2)
 
     // turn the AI's description into overrides for a building record (values are validated again here)
     function patchFromLook(look) {
@@ -2797,41 +2854,62 @@
       return patch;
     }
 
-    function applyLook(id, look, source = "a photo") {
-      const d = describeTarget(id), patch = patchFromLook(look);
-      const pct = patch.look.glazing == null ? "" : `, ${Math.round(patch.look.glazing * 100)}% glazing`;
-      mutate(() => { restyled[id] = patch; applyRestyles(); },
-        { action: "restyle", targetId: id, label: `Restyled ${d.name} from ${source} (${patch.look.material}${pct})`, at: d.at });
+    // put several AI looks on the scene as ONE edit (one undo, one log entry)
+    function applyLooks(looks, source = "AI") {
+      const ids = Object.keys(looks).filter((id) => buildings.has(id) && !id.startsWith("custom-"));
+      if (!ids.length) return 0;
+      const names = ids.slice(0, 3).map((id) => describeTarget(id).name.replace(/^./, (c) => c.toUpperCase()));
+      const more = ids.length > 3 ? ` +${ids.length - 3} more` : "";
+      const label = ids.length === 1 ? `Restyled ${names[0]} (${source})` : `Restyled ${ids.length} nearby buildings (${source}): ${names.join(", ")}${more}`;
+      mutate(() => { for (const id of ids) restyled[id] = patchFromLook(looks[id]); applyRestyles(); },
+        { action: "restyle", targetId: ids[0], label, at: describeTarget(ids[0]).at });
+      return ids.length;
     }
 
-    async function restyleSelected() {
-      if (!selected || selected.startsWith("pl-")) return toast("Select a building first");
-      const file = $("styleFile").files[0];
-      if (!file) return toast("Choose a photo of the building first");
+    // the closest buildings to the camera that have not been restyled yet
+    function nearestToRestyle(n = RESTYLE_COUNT) {
+      const cx = camera.position.x, cz = camera.position.z, out = [];
+      for (const [id, b] of buildings) {
+        if (!id.startsWith("osm-") || removed.has(id) || restyled[id]) continue;
+        const ring = cleanRing(b.footprint);
+        if (ring.length < 3 || polyArea(ring) < MIN_RESTYLE_AREA) continue;
+        const at = describeTarget(id).at;
+        if (!at) continue;
+        out.push({ id, b, area: polyArea(ring), d: Math.hypot(at[0] - cx, at[1] - cz) });
+      }
+      return out.sort((p, q) => p.d - q.d).slice(0, n);
+    }
+
+    async function restyleNearby() {
       if (API === null) return toast("AI restyle needs the server (npm start)");
-      const id = selected, b = buildings.get(id), btn = $("btnRestyle");
-      btn.disabled = true; setStyleNote("Asking Gemini to look at the photo…");
+      const near = nearestToRestyle();
+      if (!near.length) { setStyleNote("No more buildings nearby to restyle. Walk somewhere else and press again."); return toast("Nothing left to restyle here"); }
+      const btn = $("btnRestyle");
+      btn.disabled = true; setStyleNote(`Asking OpenAI about the ${near.length} closest buildings…`);
       try {
-        const image = await photoToJpegBase64(file);
-        const res = await apiCall("/api/describe-building", {
+        const opts = {
           method: "POST",
-          body: JSON.stringify({ image, mime: "image/jpeg", context: { name: b.name || null, type: b.kind || null, heightMetres: Math.round(b.height) } })
-        }, 60000);
-        if (!res.look) throw new Error("the AI gave no answer");
-        applyLook(id, res.look);
-        const c = res.look.confidence == null ? "" : ` (confidence ${Math.round(res.look.confidence * 100)}%)`;
-        setStyleNote(`${res.look.notes || "Done."}${c}`);
+          body: JSON.stringify({ buildings: near.map(({ id, b, area }) => ({ id, name: b.name || null, type: b.kind || null, heightMetres: Math.round(b.height), areaM2: Math.round(area), tags: b.osm || {} })) })
+        };
+        let res;
+        try { res = await apiCall("/api/restyle-nearby", opts, 90000); }
+        catch (err) {
+          // HTTP 404/405/501 = this page is being served by something that isn't the Waypoint server (Live Server, python -m http.server...): try the real one
+          if (API === "" && /^HTTP (404|405|501)$/.test(err.message)) {
+            API = "http://localhost:3000";
+            try { res = await apiCall("/api/restyle-nearby", opts, 90000); }
+            catch (err2) { API = ""; throw new Error("this page isn't being served by the Waypoint server. Run npm start and open http://localhost:3000 instead."); }
+          } else throw err;
+        }
+        const n = applyLooks(res.looks || {}, "AI");
+        if (!n) throw new Error("the AI gave no usable answer");
+        const low = Object.values(res.looks).filter((l) => (l.confidence ?? 0.5) < 0.4).length;
+        setStyleNote(`Restyled ${n} building${n === 1 ? "" : "s"}${low ? ` (${low} ${low === 1 ? "was an educated guess" : "were educated guesses"})` : ""}. Press again for the next closest.`);
       } catch (e) {
         console.warn("Restyle failed", e);
         const offline = e instanceof TypeError || e.name === "AbortError";
         setStyleNote(offline ? "Couldn't reach the server. Start it with npm start and open the page through it." : "Restyle failed: " + e.message);
       } finally { btn.disabled = false; }
-    }
-
-    function unstyleSelected() {
-      if (!selected || !restyled[selected]) return toast("The selected building has no AI look");
-      const id = selected, d = describeTarget(id);
-      mutate(() => { delete restyled[id]; applyRestyles(); }, { action: "restyle", targetId: id, label: `Removed the AI look from ${d.name}`, at: d.at });
     }
 
     // ---- panel text ----
@@ -2874,16 +2952,11 @@
     $("btnDelete").onclick = deleteSelected;
     $("btnUndo").onclick = undo;
     $("btnReplaceModel").onclick = replaceWithModel;
+    $("modelSelect").addEventListener("change", () => showModelPreview($("modelSelect").value));
     $("btnPlaceModel").onclick = placeModel;
     $("btnReplay").onclick = replayLog;
     $("btnLogClear").onclick = clearLog;
-    $("styleFile").addEventListener("change", (e) => {
-      const f = e.target.files[0], l = $("styleFileLbl");
-      l.classList.toggle("has", !!f);
-      l.querySelector(".ftext").textContent = f ? f.name : "Choose a photo of the building";
-    });
-    $("btnRestyle").onclick = restyleSelected;
-    $("btnUnstyle").onclick = unstyleSelected;
+    $("btnRestyle").onclick = restyleNearby;
     $("modelFile").addEventListener("change", async (e) => {
       for (const f of e.target.files) {
         try { await addModelFile(f); } catch (err) { console.error(err); toast("Couldn't read " + f.name); }
@@ -3018,8 +3091,8 @@
       env: envGroup,
       state: () => ({ selected, removed: [...removed], placements, restyled: JSON.parse(JSON.stringify(restyled)) }),
       select: (id) => { selected = id; updateHighlight(); updateUI(); },
-      applyLook, restyled: () => restyled, pollNow: pollRemote, diffState, applyDelta,
-      actions: { deleteSelected, replaceWithModel, placeModel, rotateSelected, adjustHeight, restyleSelected, unstyleSelected }
+      applyLooks, restyled: () => restyled, pollNow: pollRemote, diffState, applyDelta,
+      actions: { deleteSelected, replaceWithModel, placeModel, rotateSelected, adjustHeight, restyleNearby, applyLooks, nearestToRestyle }
     };
   </script>
 </body>
