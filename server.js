@@ -211,7 +211,7 @@ app.get("/api/recent", wrap(async (req, res) => {
 // ---------- AI: restyle the buildings near the player (Gemini) ----------
 // explorer.html sends the closest few buildings (name, size, a few OpenStreetMap tags); one Gemini call returns a small JSON
 // "look" for each (materials, colours, glazing...) which the explorer applies. The API key stays here on the server.
-const GEMINI_MODELS = process.env.GEMINI_MODEL ? [process.env.GEMINI_MODEL] : ["gemini-2.5-flash"];
+const GEMINI_MODELS = process.env.GEMINI_MODEL ? [process.env.GEMINI_MODEL] : ["gemini-3.6-flash", "gemini-2.5-flash"];
 const MAX_BUILDINGS = 12;
 
 const LOOK_KEYS = `{
