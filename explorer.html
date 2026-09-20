@@ -260,14 +260,6 @@
     </details>
 
     <details class="sec" open>
-      <summary><span class="grow">Restyle with AI</span></summary>
-      <div class="body">
-        <button id="btnRestyle">Restyle nearest buildings (AI)</button>
-        <div class="note" id="styleNote" style="margin-top:8px">Restyles the 8 buildings closest to you (walls, windows, roof) using their names and map data. Press again for the next 8. Undo reverts it. Needs the server running.</div>
-      </div>
-    </details>
-
-    <details class="sec" open>
       <summary><span class="grow">Edit history</span><span class="badge" id="syncBadge" title="Where the log is stored">this browser</span></summary>
       <div class="body">
         <div class="row">
@@ -275,6 +267,14 @@
           <button id="btnLogClear" class="secondary">Clear</button>
         </div>
         <div id="logList"></div>
+      </div>
+    </details>
+
+    <details class="sec" open>
+      <summary><span class="grow">Restyle with AI</span></summary>
+      <div class="body">
+        <button id="btnRestyle">Restyle nearest buildings (AI)</button>
+        <div class="note" id="styleNote" style="margin-top:8px">Restyles the 8 buildings closest to you (walls, windows, roof) using their names and map data. Press again for the next 8. Undo reverts it. Needs the server running.</div>
       </div>
     </details>
 
@@ -3069,6 +3069,15 @@
     const setStyleNote = (msg) => { $("styleNote").textContent = msg || ""; };
     const HEX6 = /^#[0-9a-f]{6}$/i;
     const RESTYLE_COUNT = 8, MIN_RESTYLE_AREA = 40;   // skip sheds and garages smaller than this (m2)
+    const AUTO_RESTYLE_KEY = storageKey + ":autoRestyled";
+    async function autoRestyleOnFirstVisit() {
+      if (API === null) return;
+      try { if (localStorage.getItem(AUTO_RESTYLE_KEY)) return; } catch { /* storage blocked - fall through and try anyway */ }
+      try {
+        await restyleNearby(5, { silent: true });
+        localStorage.setItem(AUTO_RESTYLE_KEY, "1");
+      } catch (e) { console.warn("Auto-restyle on first visit failed (not fatal):", e); }
+    }
 
     // turn the AI's description into overrides for a building record (values are validated again here)
     function patchFromLook(look) {
@@ -3120,10 +3129,10 @@
       return out.sort((p, q) => p.d - q.d).slice(0, n);
     }
 
-    async function restyleNearby() {
-      if (API === null) return toast("AI restyle needs the server (npm start)");
-      const near = nearestToRestyle();
-      if (!near.length) { setStyleNote("No more buildings nearby to restyle. Walk somewhere else and press again."); return toast("Nothing left to restyle here"); }
+    async function restyleNearby(count = RESTYLE_COUNT, { silent = false } = {}) {
+      if (API === null) { if (!silent) toast("AI restyle needs the server (npm start)"); return; }
+      const near = nearestToRestyle(count);
+      if (!near.length) { setStyleNote("No more buildings nearby to restyle. Walk somewhere else and press again."); if (!silent) toast("Nothing left to restyle here"); return; }
       const btn = $("btnRestyle");
       btn.disabled = true; setStyleNote(`Asking Gemini about the ${near.length} closest buildings…`);
       try {
@@ -3223,7 +3232,7 @@
     $("btnPlaceModel").onclick = placeModel;
     $("btnReplay").onclick = replayLog;
     $("btnLogClear").onclick = clearLog;
-    $("btnRestyle").onclick = restyleNearby;
+    $("btnRestyle").onclick = () => restyleNearby();
     $("modelFile").addEventListener("change", async (e) => {
       for (const f of e.target.files) {
         try { await addModelFile(f); } catch (err) { console.error(err); toast("Couldn't read " + f.name); }
@@ -3279,6 +3288,7 @@
     loadTerrain().catch((err) => console.warn("Terrain failed - staying flat.", err));
     // Buildings first (so they show up quickly), then the ground details
     loadBuildings()
+      .then(() => autoRestyleOnFirstVisit())
       .catch((err) => console.error("Could not load buildings:", err))
       .then(() => loadEnvironment())
       .catch((err) => console.error("Could not load roads/parks/trees:", err));
