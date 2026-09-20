@@ -118,18 +118,9 @@
     <button id="btnUnstyle" class="secondary">Remove AI look from selected</button>
     <div class="note" id="styleNote" style="margin-top:6px">Select a building, choose a photo of it (a straight-on shot of one side works best), then restyle. Needs the server running.</div>
 
-    <h3>Layout</h3>
-    <div class="row">
-      <button id="btnExport" class="secondary">Export</button>
-      <button id="btnImport" class="secondary">Import</button>
-      <button id="btnReset" class="secondary">Reset</button>
-    </div>
-    <input type="file" id="importFile" accept=".json" style="display:none">
-
     <h3>Edit history <span class="badge" id="syncBadge" title="Where the log is stored">this browser</span></h3>
     <div class="row">
       <button id="btnReplay" class="secondary">Replay</button>
-      <button id="btnLogExport" class="secondary">Export log</button>
       <button id="btnLogClear" class="secondary">Clear</button>
     </div>
     <div id="logList"></div>
@@ -171,7 +162,7 @@
     // =====================================================================
     // 1. Read the selection passed in from the picker
     // =====================================================================
-    console.log("explorer.html v6.1 (AI restyle from photo;edit log + Tiger Data sync;satellite ground, detailed buildings, sturdier map-data loading)");
+    console.log("explorer.html v6.2 (live teammate sync; AI restyle from photo; edit log + Tiger Data sync;satellite ground, detailed buildings, sturdier map-data loading)");
     const params = new URLSearchParams(window.location.search);
     let centerLat = parseFloat(params.get("lat"));
     let centerLng = parseFloat(params.get("lng"));
@@ -2204,20 +2195,22 @@
     // meta = { action, targetId, label, at: [x, z] }  (describes the edit for the history panel)
     function mutate(fn, meta) {
       if (replaying) return toast("Replay is running - press Stop replay first");
-      history.push(JSON.stringify(serialize()));
+      const beforeJson = JSON.stringify(serialize());
+      history.push(beforeJson);
       if (history.length > 60) history.shift();
       fn();
       afterChange();
-      logEdit(meta || { action: "edit", label: "Edited the scene" });
+      logEdit(meta || { action: "edit", label: "Edited the scene" }, JSON.parse(beforeJson));
     }
 
     function undo() {
       if (replaying) return toast("Replay is running - press Stop replay first");
       const snap = history.pop();
       if (!snap) return toast("Nothing to undo");
+      const before = JSON.parse(JSON.stringify(serialize()));
       applyState(JSON.parse(snap));
       afterChange();
-      logEdit({ action: "undo", label: "Undid the last edit" });
+      logEdit({ action: "undo", label: "Undid the last edit" }, before);
       toast("Undone");
     }
 
@@ -2274,10 +2267,41 @@
       return { name, at };
     }
 
-    function logEdit(meta) {
+    // ---- deltas: what one edit changed, so a teammate's edit can be applied on top of your own scene ----
+    const COLLECTIONS = {
+      removed: (s) => Object.fromEntries((s.removed || []).map((id) => [id, true])),
+      customs: (s) => Object.fromEntries((s.customs || []).map((c) => [c.id, c])),
+      restyled: (s) => s.restyled || {},
+      placements: (s) => Object.fromEntries((s.placements || []).map((q) => [q.pid, q]))
+    };
+    function diffState(a, b) {
+      const delta = {};
+      for (const [name, get] of Object.entries(COLLECTIONS)) {
+        const A = get(a), B = get(b), set = {}, del = [];
+        for (const k of Object.keys(B)) if (!(k in A) || JSON.stringify(A[k]) !== JSON.stringify(B[k])) set[k] = B[k];
+        for (const k of Object.keys(A)) if (!(k in B)) del.push(k);
+        if (del.length || Object.keys(set).length) delta[name] = { set, del };
+      }
+      return delta;
+    }
+    function applyDelta(state, delta) {
+      const out = clone(state), maps = {};
+      for (const [name, get] of Object.entries(COLLECTIONS)) maps[name] = get(out);
+      for (const [name, d] of Object.entries(delta || {})) {
+        const m = maps[name];
+        if (!m || !d || typeof d !== "object") continue;
+        for (const k of Array.isArray(d.del) ? d.del : []) delete m[k];
+        for (const [k, v] of Object.entries(d.set && typeof d.set === "object" ? d.set : {})) m[k] = v;
+      }
+      return { removed: Object.keys(maps.removed), customs: Object.values(maps.customs), restyled: maps.restyled, placements: Object.values(maps.placements) };
+    }
+
+    function logEdit(meta, before) {
+      const after = clone(serialize());
       const entry = {
         id: newId("e"), ts: new Date().toISOString(), action: meta.action || "edit", targetId: meta.targetId || null,
-        label: meta.label || "Edited the scene", at: meta.at || null, state: clone(serialize()), synced: false
+        label: meta.label || "Edited the scene", at: meta.at || null, state: after,
+        delta: before ? diffState(before, after) : null, synced: false
       };
       editLog.entries.push(entry);
       while (editLog.entries.length > MAX_LOG) editLog.base = editLog.entries.shift().state;
@@ -2350,16 +2374,6 @@
       }
     }
 
-    function exportLog() {
-      const data = { version: 1, scene: SCENE_KEY, center: [centerLat, centerLng], radius: radiusMeters, base: editLog.base,
-        entries: editLog.entries.map(({ synced, ...rest }) => rest) };
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: "application/json" }));
-      a.download = "waypoint-edit-log.json";
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1500);
-    }
-
     let clearArmed = 0;
     function clearLog() {
       if (!clearArmed) {   // first click arms it, second (within 3 s) does it
@@ -2394,7 +2408,7 @@
       };
       for (let i = n - 1; i >= 0; i--) {
         const e = editLog.entries[i], kind = e.action.startsWith("replace") ? "replace" : e.action;
-        row(i === n - 1 ? "latest" : "", kind, e.label, fmtTime(e.ts) + (sync.on && !e.synced ? " · syncing…" : ""), e.at, i === n - 1 ? null : () => revertTo(e.id));
+        row(i === n - 1 ? "latest" : "", kind, e.label, (e.remote ? "teammate · " : "") + fmtTime(e.ts) + (sync.on && !e.synced ? " · syncing…" : ""), e.at, i === n - 1 ? null : () => revertTo(e.id));
       }
       row("", "", "Original scene", "before the first logged edit", null, () => revertTo("base"));
     }
@@ -2406,7 +2420,8 @@
       if (p) return p.replace(/\/$/, "");
       return location.protocol.startsWith("http") ? "" : "http://localhost:3000";
     })();
-    const sync = { on: false, busy: false, timer: 0 };
+    const sync = { on: false, busy: false, timer: 0, cursor: null, polling: false, tries: 0 };
+    const POLL_MS = 3000;
 
     async function apiCall(path, opts = {}, timeout = 8000) {
       const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), timeout);
@@ -2448,17 +2463,57 @@
       } finally { sync.busy = false; }
     }
 
+    // ---- live sync: every few seconds ask Tiger Data for edits stored since the last one we saw ----
+    function mergeRemote(entries) {
+      let state = clone(serialize()), applied = 0;
+      for (const e of entries) {
+        const entry = { ...e, synced: true, remote: true };
+        let i = editLog.entries.length;
+        while (i > 0 && editLog.entries[i - 1].ts > entry.ts) i--;   // keep the log in time order
+        editLog.entries.splice(i, 0, entry);
+        if (e.delta && typeof e.delta === "object") {
+          state = applyDelta(state, e.delta);
+          for (let k = 0; k < history.length; k++) history[k] = JSON.stringify(applyDelta(JSON.parse(history[k]), e.delta));   // undo must not wipe their edit
+          applied++;
+        }
+      }
+      while (editLog.entries.length > MAX_LOG) editLog.base = editLog.entries.shift().state;
+      if (applied) { applyState(state); afterChange(); }
+      saveLog(); renderLog();
+      toast(entries.length === 1 ? "Teammate: " + entries[0].label : entries.length + " new edits from teammates");
+    }
+
+    async function pollRemote() {
+      if (!sync.on || sync.polling || replaying || !sync.cursor || document.hidden) return;
+      sync.polling = true;
+      try {
+        const d = await apiCall(`/api/log?scene=${encodeURIComponent(SCENE_KEY)}&since=${encodeURIComponent(sync.cursor)}`, {}, 6000);
+        const known = new Set(editLog.entries.map((e) => e.id));
+        const fresh = (d.entries || []).filter((e) => !known.has(e.id));
+        if (fresh.length) mergeRemote(fresh);
+        if (d.cursor) sync.cursor = d.cursor;
+      } catch (e) { /* offline or busy: try again next tick */ }
+      finally { sync.polling = false; }
+    }
+    setInterval(pollRemote, POLL_MS);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) pollRemote(); });
+
     async function initSync() {
       if (API === null) return;
       try {
-        const h = await apiCall("/api/health", {}, 2500);
+        const h = await apiCall("/api/health", {}, 6000);
         if (!h.ok) throw new Error("database not ready");
-      } catch (e) { console.log("Edit log: no Tiger Data server reachable - keeping the log in this browser."); return; }
+      } catch (e) {
+        console.log("Edit log: no Tiger Data server reachable - keeping the log in this browser.");
+        if (++sync.tries < 6) setTimeout(initSync, 10000);   // the first database connection can be slow; try again a few times
+        return;
+      }
       sync.on = true;
       await flushSync();                       // push anything made while offline
       if (editLog.entries.some((e) => !e.synced)) return;   // couldn't push; stay local for now
       try {
         const d = await apiCall("/api/log?scene=" + encodeURIComponent(SCENE_KEY));
+        sync.cursor = d.cursor || null;
         if (d.entries && d.entries.length) {   // the database is the source of truth: adopt its log and its latest scene
           editLog = { base: d.base || editLog.base, entries: d.entries.map((e) => ({ ...e, synced: true })) };
           applyState(clone(editLog.entries[editLog.entries.length - 1].state));
@@ -2591,26 +2646,6 @@
       }
     }
 
-    // ---- layout import / export ----
-    function exportLayout() {
-      const data = { version: 1, center: [centerLat, centerLng], radius: radiusMeters, ...serialize() };
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: "application/json" }));
-      a.download = "waypoint-layout.json";
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1500);
-    }
-
-    async function importLayout(file) {
-      try {
-        const data = JSON.parse(await file.text());
-        mutate(() => applyState(data), { action: "import", label: "Imported a layout file" });
-        toast("Layout imported");
-      } catch (e) {
-        toast("Couldn't read that layout file");
-      }
-    }
-
     // ---- AI restyle: a photo of the real building -> Gemini (through server.js) -> wall colour, glazing, window style, roof ----
     const setStyleNote = (msg) => { $("styleNote").textContent = msg || ""; };
     const HEX6 = /^#[0-9a-f]{6}$/i;
@@ -2716,13 +2751,7 @@
     $("btnUndo").onclick = undo;
     $("btnReplaceModel").onclick = replaceWithModel;
     $("btnPlaceModel").onclick = placeModel;
-    $("btnExport").onclick = exportLayout;
-    $("btnImport").onclick = () => $("importFile").click();
-    $("importFile").addEventListener("change", (e) => { if (e.target.files[0]) importLayout(e.target.files[0]); e.target.value = ""; });
-    $("btnReset").onclick = () => mutate(() => { removed = new Set(); placements = []; applyState({}); selected = null; },
-      { action: "reset", label: "Reset the layout" });
     $("btnReplay").onclick = replayLog;
-    $("btnLogExport").onclick = exportLog;
     $("btnLogClear").onclick = clearLog;
     $("btnRestyle").onclick = restyleSelected;
     $("btnUnstyle").onclick = unstyleSelected;
@@ -2860,7 +2889,7 @@
       env: envGroup,
       state: () => ({ selected, removed: [...removed], placements, restyled: JSON.parse(JSON.stringify(restyled)) }),
       select: (id) => { selected = id; updateHighlight(); updateUI(); },
-      applyLook, restyled: () => restyled,
+      applyLook, restyled: () => restyled, pollNow: pollRemote, diffState, applyDelta,
       actions: { deleteSelected, replaceWithModel, placeModel, rotateSelected, adjustHeight, restyleSelected, unstyleSelected }
     };
   </script>

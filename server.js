@@ -50,8 +50,13 @@ async function initSchema() {
       label      text,
       at_x double precision, at_z double precision,
       state      jsonb NOT NULL,                 -- scene state right after this edit (used for revert / replay)
-      session_id text
+      session_id text,
+      delta      jsonb,                          -- just what this edit changed (teammates apply it live)
+      created_at timestamptz NOT NULL DEFAULT now()   -- when the server stored it (live sync polls on this, not the client clock)
     )`);
+  // tables made by an earlier version of this server get the new columns too
+  await pool.query("ALTER TABLE edits ADD COLUMN IF NOT EXISTS delta jsonb");
+  await pool.query("ALTER TABLE edits ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()");
   try {
     // Tiger Data already has the extension; the CREATE may be refused for a non-superuser, which is fine
     await pool.query("CREATE EXTENSION IF NOT EXISTS timescaledb").catch(() => {});
@@ -63,6 +68,7 @@ async function initSchema() {
   // unique indexes on a hypertable must include the time column
   await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS edits_entry_uniq ON edits (scene_key, entry_id, ts)");
   await pool.query("CREATE INDEX IF NOT EXISTS edits_scene_ts ON edits (scene_key, ts DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS edits_scene_created ON edits (scene_key, created_at)");
 }
 
 // ---------- app ----------
@@ -104,11 +110,12 @@ app.post("/api/edit", wrap(async (req, res) => {
        ON CONFLICT (scene_key) DO UPDATE SET state = $6, updated_at = now()`,
       [key, num(center?.[0]), num(center?.[1]), Number.isInteger(radius) ? radius : null, base, entry.state]);
     await client.query(
-      `INSERT INTO edits (ts, scene_key, entry_id, action, target_id, label, at_x, at_z, state, session_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `INSERT INTO edits (ts, scene_key, entry_id, action, target_id, label, at_x, at_z, state, session_id, delta)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        ON CONFLICT (scene_key, entry_id, ts) DO NOTHING`,
       [ts, key, entry.id.slice(0, 80), String(entry.action || "edit").slice(0, 40), entry.targetId ? String(entry.targetId).slice(0, 120) : null,
-       String(entry.label || "").slice(0, 300), num(at[0]), num(at[1]), entry.state, typeof session === "string" ? session.slice(0, 80) : null]);
+       String(entry.label || "").slice(0, 300), num(at[0]), num(at[1]), entry.state, typeof session === "string" ? session.slice(0, 80) : null,
+       isObj(entry.delta) ? entry.delta : null]);
     await client.query("COMMIT");
     res.json({ ok: true });
   } catch (e) {
@@ -117,27 +124,39 @@ app.post("/api/edit", wrap(async (req, res) => {
   } finally { client.release(); }
 }));
 
-// The saved log of a scene: { base, entries: [oldest ... newest] }. Long logs are trimmed to the latest 500,
+// The saved log of a scene: { base, entries: [oldest ... newest], cursor }. Long logs are trimmed to the latest 500,
 // with `base` moved forward so revert and replay still line up.
-const LOG_LIMIT = 500;
+// With ?since=<cursor> it returns only what was stored after that point (this is what live polling uses),
+// oldest first, plus a new cursor. Cursors are server times, so teammates' clocks don't matter.
+const LOG_LIMIT = 500, POLL_LIMIT = 200;
+const entryOut = (r) => ({
+  id: r.entry_id, ts: r.ts.toISOString(), action: r.action, targetId: r.target_id, label: r.label,
+  at: r.at_x === null || r.at_z === null ? null : [r.at_x, r.at_z], state: r.state, delta: r.delta, session: r.session_id
+});
 app.get("/api/log", wrap(async (req, res) => {
   const key = sceneOf(req.query.scene);
   if (!key) return res.status(400).json({ error: "bad scene" });
+  const COLS = "ts, created_at, entry_id, action, target_id, label, at_x, at_z, state, delta, session_id";
+  if (req.query.since) {
+    const since = new Date(req.query.since);
+    if (Number.isNaN(since.getTime())) return res.status(400).json({ error: "bad since" });
+    // 2 s of overlap so an edit that committed a moment late is never missed; the client skips ones it already has
+    const { rows } = await pool.query(
+      `SELECT ${COLS} FROM edits WHERE scene_key = $1 AND created_at > $2::timestamptz - interval '2 seconds'
+       ORDER BY created_at, ts LIMIT $3`, [key, since, POLL_LIMIT]);
+    const cursor = rows.length ? rows[rows.length - 1].created_at.toISOString() : since.toISOString();
+    return res.json({ entries: rows.map(entryOut), cursor });
+  }
   const scene = await pool.query("SELECT base FROM scenes WHERE scene_key = $1", [key]);
-  if (!scene.rowCount) return res.json({ base: null, entries: [] });
+  const cur = await pool.query("SELECT COALESCE(max(created_at), now()) AS c FROM edits WHERE scene_key = $1", [key]);
+  const cursor = cur.rows[0].c.toISOString();
+  if (!scene.rowCount) return res.json({ base: null, entries: [], cursor });
   const { rows } = await pool.query(
-    `SELECT ts, entry_id, action, target_id, label, at_x, at_z, state FROM edits
-     WHERE scene_key = $1 ORDER BY ts DESC, entry_id DESC LIMIT $2`, [key, LOG_LIMIT + 1]);
+    `SELECT ${COLS} FROM edits WHERE scene_key = $1 ORDER BY ts DESC, entry_id DESC LIMIT $2`, [key, LOG_LIMIT + 1]);
   rows.reverse();
   let base = scene.rows[0].base;
   if (rows.length > LOG_LIMIT) base = rows.shift().state;
-  res.json({
-    base,
-    entries: rows.map((r) => ({
-      id: r.entry_id, ts: r.ts.toISOString(), action: r.action, targetId: r.target_id, label: r.label,
-      at: r.at_x === null || r.at_z === null ? null : [r.at_x, r.at_z], state: r.state
-    }))
-  });
+  res.json({ base, entries: rows.map(entryOut), cursor });
 }));
 
 app.delete("/api/log", wrap(async (req, res) => {
