@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Waypoint – Image to 3D</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%231d8fe1%27/%3E%3Cpath d=%27M16 26s-7-6-7-11a7 7 0 0 1 14 0c0 5-7 11-7 11z%27 fill=%27none%27 stroke=%27white%27 stroke-width=%272.4%27/%3E%3Ccircle cx=%2716%27 cy=%2715%27 r=%272.6%27 fill=%27white%27/%3E%3C/svg%3E" />
+  <style>
+    :root {
+      --accent: #1d8fe1; --accent-dark: #1673b8; --ink: #14202b; --muted: #6b7a89;
+      --line: #e3e9ef; --soft: #f4f8fb; --danger: #d63c43; --ok: #1f9d55;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; color: var(--ink); }
+    body {
+      background:
+        radial-gradient(900px 520px at 8% 0%, rgba(55, 168, 245, 0.22), transparent 62%),
+        radial-gradient(800px 520px at 100% 100%, rgba(22, 115, 184, 0.16), transparent 62%),
+        #f4f8fb;
+      background-attachment: fixed;
+    }
+    kbd { font: inherit; font-size: 11px; padding: 1px 6px; border-radius: 5px; background: #e6edf3; color: var(--muted); }
+
+    header { display: flex; align-items: center; gap: 14px; padding: 16px 20px 0; flex-wrap: wrap; }
+    #backLink {
+      display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px 8px 10px;
+      background: rgba(255,255,255,0.92); color: var(--ink); border-radius: 999px;
+      font-size: 13px; font-weight: 600; text-decoration: none;
+      box-shadow: 0 4px 16px rgba(20,32,43,0.14), 0 1px 2px rgba(20,32,43,0.1);
+      transition: transform .12s, box-shadow .12s;
+    }
+    #backLink:hover { transform: translateX(-1px); box-shadow: 0 6px 20px rgba(20,32,43,0.2); }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .logo { width: 34px; height: 34px; border-radius: 10px; color: #fff; display: grid; place-items: center;
+      background: linear-gradient(135deg, #37a8f5, var(--accent-dark)); box-shadow: 0 6px 16px rgba(29,143,225,0.3); }
+    .brand h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; line-height: 1.15; }
+    .brand p { margin: 1px 0 0; font-size: 12px; color: var(--muted); }
+
+    main { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: 18px; padding: 16px 20px 24px; align-items: start; }
+    @media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+    .card { background: rgba(255,255,255,0.94); border-radius: 16px; box-shadow: 0 8px 30px rgba(20,32,43,0.12), 0 1px 3px rgba(20,32,43,0.08); padding: 16px; }
+    .label { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+
+    #banner { display: none; margin-bottom: 14px; padding: 10px 12px; border-radius: 10px; font-size: 12.5px; line-height: 1.45; background: #fff6e0; color: #6b4b00; border: 1px solid #f1dc9c; }
+    #banner code { background: rgba(0,0,0,0.06); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+    #banner.show { display: block; }
+
+    #drop {
+      display: grid; place-items: center; text-align: center; gap: 4px; min-height: 168px; padding: 16px; cursor: pointer;
+      border: 2px dashed #b7c9d8; border-radius: 14px; background: var(--soft); color: var(--muted); font-size: 13px; line-height: 1.4;
+      transition: border-color .12s, background .12s; position: relative; overflow: hidden;
+    }
+    #drop:hover, #drop.over { border-color: var(--accent); background: #eaf5fd; }
+    #drop:focus-visible { outline: 3px solid rgba(29,143,225,0.4); outline-offset: 2px; }
+    #drop strong { color: var(--ink); font-size: 14px; }
+    #drop .ico { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: #e3f1fc; color: var(--accent-dark); margin: 0 auto 6px; }
+    #thumb { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background:
+      conic-gradient(#eef2f6 25%, #fff 0 50%, #eef2f6 0 75%, #fff 0) 0 0 / 16px 16px; display: none; }
+    #drop.has #thumb { display: block; }
+    #drop.has .hint { display: none; }
+    #drop .change { position: absolute; right: 8px; bottom: 8px; display: none; padding: 4px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600;
+      background: rgba(20,32,43,0.72); color: #fff; }
+    #drop.has .change { display: block; }
+
+    .opts { display: grid; gap: 10px; margin-top: 14px; }
+    .opt { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
+    .opt small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+    select, input[type=number] {
+      font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink);
+    }
+    input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); }
+
+    button.btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px; font: inherit; font-size: 13.5px; font-weight: 700;
+      height: 40px; padding: 0 16px; border: 0; border-radius: 10px; cursor: pointer; background: var(--accent); color: #fff;
+      transition: background .12s, transform .06s;
+    }
+    button.btn:hover:not(:disabled) { background: var(--accent-dark); }
+    button.btn:active:not(:disabled) { transform: translateY(1px); }
+    button.btn:disabled { opacity: .5; cursor: not-allowed; }
+    button.btn.secondary { background: #fff; color: var(--ink); border: 1px solid var(--line); font-weight: 600; }
+    button.btn.secondary:hover:not(:disabled) { background: var(--soft); border-color: #cfdae4; }
+    button.btn.small { height: 34px; font-size: 12.5px; padding: 0 12px; }
+    #gen { width: 100%; margin-top: 16px; height: 44px; font-size: 14.5px; }
+    #cancel { width: 100%; margin-top: 8px; }
+
+    #status { margin-top: 12px; font-size: 12.5px; line-height: 1.45; color: var(--muted); min-height: 18px; }
+    #status.err { color: var(--danger); }
+    #status.ok { color: var(--ok); }
+    #bar { display: none; height: 4px; border-radius: 4px; background: #dbe8f2; overflow: hidden; margin-top: 10px; }
+    #bar.show { display: block; }
+    #bar::after { content: ""; display: block; height: 100%; width: 38%; border-radius: 4px; background: var(--accent); animation: slide 1.15s ease-in-out infinite; }
+    @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(270%); } }
+    .tips { margin: 16px 0 0; padding: 12px 14px; border-radius: 12px; background: var(--soft); border: 1px solid var(--line); font-size: 12px; line-height: 1.5; color: var(--muted); }
+    .tips b { color: var(--ink); }
+    .tips ul { margin: 6px 0 0; padding-left: 18px; }
+
+    #stage { position: relative; height: min(64vh, 620px); min-height: 340px; border-radius: 16px; overflow: hidden;
+      background: linear-gradient(180deg, #dcecf8 0%, #f4f8fb 68%); box-shadow: 0 8px 30px rgba(20,32,43,0.12), 0 1px 3px rgba(20,32,43,0.08); }
+    #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    #empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; color: var(--muted); font-size: 13.5px; line-height: 1.5; pointer-events: none; }
+    #empty svg { display: block; margin: 0 auto 10px; opacity: .55; }
+    #stage.has #empty { display: none; }
+    #dims { position: absolute; left: 12px; bottom: 10px; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; color: #fff; background: rgba(0,0,0,0.42); display: none; }
+    #stage.has #dims { display: block; }
+    #hintOrbit { position: absolute; right: 12px; bottom: 10px; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; color: #fff; background: rgba(0,0,0,0.42); display: none; }
+    #stage.has #hintOrbit { display: block; }
+    #busy { position: absolute; inset: 0; display: none; place-items: center; background: rgba(244,248,251,0.6); backdrop-filter: blur(2px); font-size: 13px; color: var(--muted); }
+    #busy.show { display: grid; }
+
+    #result { margin-top: 14px; display: none; }
+    #result.show { display: block; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .toolbar .sp { flex: 1 1 8px; }
+    .sizebox { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+    .sizebox input[type=number] { width: 70px; }
+    .sizebox.keep { font-weight: 500; color: var(--muted); }
+    .sizebox span.u { color: var(--muted); font-weight: 500; }
+    .row2 { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
+    .note { font-size: 11.5px; color: var(--muted); line-height: 1.45; margin: 10px 0 0; }
+    #toast { position: fixed; bottom: 22px; left: 50%; transform: translate(-50%, 10px); opacity: 0; pointer-events: none; z-index: 10;
+      background: rgba(20,32,43,0.9); color: #fff; padding: 9px 16px; border-radius: 999px; font-size: 13px; transition: opacity .2s, transform .2s; max-width: 90vw; }
+    #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  </style>
+</head>
+<body>
+  <header>
+    <a id="backLink" href="map-picker.html"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>Back to menu</a>
+    <div class="brand">
+      <div class="logo"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg></div>
+      <div><h1>Image &rarr; 3D building</h1><p>Turn a photo into a model you can drop into the map</p></div>
+    </div>
+  </header>
+
+  <main>
+    <section class="card">
+      <div id="banner"></div>
+      <p class="label">1 &middot; Photo of a building</p>
+      <div id="drop" tabindex="0" role="button" aria-label="Choose a photo of a building">
+        <img id="thumb" alt="Selected photo" />
+        <div class="hint">
+          <div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-8 9"/></svg></div>
+          <strong>Drop a photo here</strong>
+          or click to choose &middot; or paste with <kbd>Ctrl</kbd>+<kbd>V</kbd><br>PNG, JPG or WebP
+        </div>
+        <span class="change">Change photo</span>
+      </div>
+      <input id="file" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+
+      <div class="opts">
+        <label class="opt"><span>Remove the background<small>Cuts the building out of the sky and street</small></span><input id="optBg" type="checkbox" checked /></label>
+        <label class="opt"><span>Detail<small>Higher looks sharper but takes longer</small></span>
+          <select id="optRes"><option value="128">Draft</option><option value="256" selected>Standard</option><option value="384">High</option></select></label>
+      </div>
+
+      <button id="gen" class="btn" disabled>Generate 3D model</button>
+      <button id="cancel" class="btn secondary small" style="display:none">Cancel</button>
+      <div id="bar"></div>
+      <div id="status"></div>
+
+      <div class="tips"><b>For the best result</b>
+        <ul>
+          <li>One building, fully in frame, taken from a slight angle so two sides show.</li>
+          <li>Little clutter or trees in front, and no people or cars if you can help it.</li>
+          <li>The back and hidden sides are the model's best guess.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <div id="stage">
+        <canvas id="view"></canvas>
+        <div id="empty"><div>
+          <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>
+          Your 3D model will appear here.<br>Choose a photo and press <b>Generate</b>.
+        </div></div>
+        <div id="busy"><div id="busyText">Working&hellip;</div></div>
+        <div id="dims"></div>
+        <div id="hintOrbit">Drag to look around</div>
+      </div>
+
+      <div id="result" class="card">
+        <p class="label">2 &middot; Adjust and use it</p>
+        <div class="toolbar">
+          <label class="sizebox">Width <input id="width" type="number" min="1" max="500" step="1" value="40" /><span class="u">m</span></label>
+          <label class="sizebox">Depth <input id="depth" type="number" min="1" max="500" step="1" value="20" /><span class="u">m</span></label>
+          <label class="sizebox">Height <input id="height" type="number" min="1" max="500" step="1" value="20" /><span class="u">m</span></label>
+          <label class="sizebox keep"><input id="keep" type="checkbox" checked /> Keep proportions</label>
+          <button id="turn" class="btn secondary small" type="button" title="Rotate 90° around the vertical axis">Turn</button>
+          <button id="tilt" class="btn secondary small" type="button" title="Rotate 90° onto its side, for when the model came out lying down">Tilt</button>
+          <button id="spin" class="btn secondary small" type="button" aria-pressed="true">Spin: on</button>
+        </div>
+        <div class="row2">
+          <button id="use" class="btn" type="button">Use in explorer &rarr;</button>
+          <button id="download" class="btn secondary" type="button">Download .glb</button>
+        </div>
+        <p class="note"><b>Width</b> is the longest side in the real world (a typical house is 10&ndash;15&nbsp;m, a lecture hall 40&ndash;60&nbsp;m). If the model came out flat, untick <b>Keep proportions</b> and raise <b>Depth</b>. In the explorer, aim at a building and press <kbd>R</kbd> to replace it with this model.</p>
+      </div>
+    </section>
+  </main>
+  <div id="toast"></div>
+
+  <script type="importmap">
+    { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }
+  </script>
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+    import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
+    import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
+    import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+
+    const $ = (id) => document.getElementById(id);
+    const MAX_SIDE = 1024;   // photos are shrunk to this before upload: TripoSR works at 512 px anyway
+
+    // ---------- where is the Waypoint server? (same rules as explorer.html) ----------
+    let API = (() => {
+      const p = new URLSearchParams(location.search).get("api");
+      if (p) return p.replace(/\/$/, "");
+      return location.protocol.startsWith("http") ? "" : "http://localhost:3000";
+    })();
+
+    let toastTimer;
+    function toast(msg, ms = 2600) {
+      const el = $("toast"); el.textContent = msg; el.classList.add("show");
+      clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("show"), ms);
+    }
+    function setStatus(msg, kind = "") { const el = $("status"); el.textContent = msg; el.className = kind; }
+
+    // ---------- banner: is the server / Baseten ready? ----------
+    async function checkSetup() {
+      const banner = $("banner");
+      const show = (html) => { banner.innerHTML = html; banner.classList.add("show"); };
+      try {
+        let r = await fetch(API + "/api/baseten-status");
+        if (API === "" && (r.status === 404 || r.status === 405)) { API = "http://localhost:3000"; r = await fetch(API + "/api/baseten-status"); }
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const j = await r.json();
+        if (!j.configured) show("Baseten isn&rsquo;t set up yet. Add <code>BASETEN_API_KEY</code> and <code>BASETEN_MODEL_ID</code> to your <code>.env</code> file and restart the server. Steps are in <code>baseten-truss/README.md</code>.");
+      } catch {
+        show("Can&rsquo;t reach the Waypoint server. Run <code>npm start</code> and open <code>http://localhost:3000/converter.html</code>.");
+      }
+    }
+    checkSetup();
+
+    // ---------- choosing a photo ----------
+    let photo = null;   // { dataUrl, name }
+    const drop = $("drop"), fileInput = $("file");
+    drop.addEventListener("click", () => fileInput.click());
+    drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } });
+    fileInput.addEventListener("change", () => { if (fileInput.files[0]) takePhoto(fileInput.files[0]); fileInput.value = ""; });
+    ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+    ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+    drop.addEventListener("drop", (e) => { const f = e.dataTransfer?.files?.[0]; if (f) takePhoto(f); });
+    window.addEventListener("dragover", (e) => e.preventDefault());
+    window.addEventListener("drop", (e) => e.preventDefault());
+    window.addEventListener("paste", (e) => {
+      const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith("image/"));
+      if (f) { e.preventDefault(); takePhoto(f); }
+    });
+
+    async function takePhoto(file) {
+      if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) { setStatus("Please choose a PNG, JPG or WebP photo.", "err"); return; }
+      try {
+        const bmp = await createImageBitmap(file);
+        const k = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
+        const w = Math.max(1, Math.round(bmp.width * k)), h = Math.max(1, Math.round(bmp.height * k));
+        const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+        const cx = cv.getContext("2d", { willReadFrequently: true });
+        cx.drawImage(bmp, 0, 0, w, h);
+        bmp.close?.();
+        // keep transparency (a cut-out photo) as PNG, otherwise a JPEG is far smaller to upload
+        let alpha = false;
+        const px = cx.getImageData(0, 0, w, h).data;
+        for (let i = 3; i < px.length; i += 4 * 7) if (px[i] < 250) { alpha = true; break; }
+        const dataUrl = alpha ? cv.toDataURL("image/png") : cv.toDataURL("image/jpeg", 0.92);
+        photo = { dataUrl, name: (file.name || "building").replace(/\.[^.]+$/, "") || "building", hasAlpha: alpha };
+        $("thumb").src = dataUrl;
+        drop.classList.add("has");
+        if (alpha) { $("optBg").checked = false; }
+        setStatus(alpha ? "This photo already has a transparent background, so background removal was turned off." : "");
+        updateGenerate();
+      } catch (e) {
+        console.error(e);
+        setStatus("Couldn't read that image. Try a PNG or JPG (iPhone HEIC photos need converting first).", "err");
+      }
+    }
+
+    // ---------- generate ----------
+    let running = false, ctl = null, timer = 0;
+    function updateGenerate() { $("gen").disabled = !photo || running; }
+    function setRunning(on) {
+      running = on;
+      $("gen").style.display = on ? "none" : "";
+      $("cancel").style.display = on ? "" : "none";
+      $("bar").classList.toggle("show", on);
+      $("busy").classList.toggle("show", on);
+      updateGenerate();
+    }
+    $("cancel").addEventListener("click", () => { ctl?.abort(); });
+
+    $("gen").addEventListener("click", async () => {
+      if (!photo || running) return;
+      setRunning(true);
+      const t0 = Date.now();
+      const tick = () => {
+        const s = Math.round((Date.now() - t0) / 1000);
+        const m = s < 15 ? "Sending the photo to Baseten…" : s < 60 ? "Generating the 3D model…" : "Still working – if the GPU was asleep the first run can take a few minutes…";
+        setStatus(`${m} ${s}s`);
+        $("busyText").textContent = `Generating… ${s}s`;
+      };
+      tick(); timer = setInterval(tick, 1000);
+      ctl = new AbortController();
+      try {
+        const body = JSON.stringify({ image: photo.dataUrl, options: { removeBackground: $("optBg").checked, resolution: +$("optRes").value } });
+        const post = () => fetch(API + "/api/image-to-3d", { method: "POST", headers: { "Content-Type": "application/json" }, body, signal: ctl.signal });
+        let r = await post();
+        if (API === "" && (r.status === 404 || r.status === 405)) { API = "http://localhost:3000"; r = await post(); }
+        if (!r.ok) {
+          let why = "";
+          try { why = (await r.json()).error || ""; } catch { /* not JSON */ }
+          if (!why && (r.status === 404 || r.status === 405)) why = "This page isn't being served by the Waypoint server. Run npm start and open http://localhost:3000/converter.html";
+          throw new Error(why || "The server replied with HTTP " + r.status);
+        }
+        const fmt = (r.headers.get("X-Model-Format") || "glb").toLowerCase();
+        const buf = await r.arrayBuffer();
+        const obj = await parseModel(buf, fmt);
+        showModel(obj, photo.name);
+        setStatus(`Done in ${Math.round((Date.now() - t0) / 1000)}s. Drag to look around, then set the real-world width.`, "ok");
+      } catch (e) {
+        if (e.name === "AbortError") setStatus("Cancelled.");
+        else { console.error(e); setStatus(e.message || String(e), "err"); }
+      } finally {
+        clearInterval(timer); setRunning(false);
+      }
+    });
+
+    // TripoSR files carry no material and no normals. A glTF with no material is fully metallic (renders black without an
+    // environment map) and without normals it looks faceted, so give it a matte material and smooth normals.
+    function polish(obj) {
+      obj.traverse((o) => {
+        if (!o.isMesh) return;
+        if (!o.geometry.attributes.normal) o.geometry.computeVertexNormals();
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+          if (!m.isMeshStandardMaterial) continue;
+          if (!m.metalnessMap) m.metalness = 0;
+          if (!m.roughnessMap) m.roughness = Math.max(m.roughness, 0.85);
+          m.side = THREE.DoubleSide;
+          m.needsUpdate = true;
+        }
+      });
+      return obj;
+    }
+
+    async function parseModel(buf, fmt) {
+      if (fmt === "obj") {
+        const g = new OBJLoader().parse(new TextDecoder().decode(buf));
+        g.traverse((o) => { if (o.isMesh && !o.material.vertexColors) o.material = new THREE.MeshStandardMaterial({ color: 0xd8dde2, roughness: 0.85 }); });
+        return polish(g);
+      }
+      const gltf = await new GLTFLoader().parseAsync(buf, "");
+      return polish(gltf.scene);
+    }
+
+    // ---------- 3D viewer ----------
+    // holder (position + uniform scale) > pivot (rotation from Turn/Tilt) > the loaded model
+    const canvas = $("view");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: false });
+    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+    renderer.shadowMap.enabled = true;
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 5000);
+    camera.position.set(60, 40, 70);
+    { const pm = new THREE.PMREMGenerator(renderer); scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture; scene.environmentIntensity = 0.55; }
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x9fb4c4, 1.1));
+    const sun = new THREE.DirectionalLight(0xffffff, 2.1);
+    sun.position.set(60, 100, 50); sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0004;
+    scene.add(sun); scene.add(sun.target);
+    const ground = new THREE.Mesh(new THREE.CircleGeometry(1, 64), new THREE.ShadowMaterial({ opacity: 0.22 }));
+    ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+    const grid = new THREE.Mesh(new THREE.RingGeometry(0.98, 1, 96), new THREE.MeshBasicMaterial({ color: 0x9db4c7, transparent: true, opacity: 0.55 }));
+    grid.rotation.x = -Math.PI / 2; grid.position.y = 0.01; scene.add(grid);
+
+    const controls = new OrbitControls(camera, canvas);
+    controls.enableDamping = true; controls.autoRotate = true; controls.autoRotateSpeed = 1.6;
+    controls.target.set(0, 5, 0);
+
+    let holder = null, pivot = null, dims = new THREE.Vector3(), baseName = "building";
+
+    function resize() {
+      const st = $("stage"), w = st.clientWidth, h = st.clientHeight;
+      renderer.setSize(w, h, false); camera.aspect = w / Math.max(1, h); camera.updateProjectionMatrix();
+    }
+    new ResizeObserver(resize).observe($("stage")); resize();
+    renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+
+    function showModel(obj, name) {
+      if (holder) scene.remove(holder);
+      obj.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
+      pivot = new THREE.Group(); pivot.add(obj);
+      holder = new THREE.Group(); holder.add(pivot); scene.add(holder);
+      baseName = name;
+      $("stage").classList.add("has"); $("result").classList.add("show");
+      refit(true, true);
+    }
+
+    // Sizes: Width = longest horizontal side, Depth = the other horizontal side, Height = vertical. With "Keep proportions"
+    // on, changing any one scales the other two with it; off, each is set on its own (fixes a model that came out flat).
+    let nat = { long: 1, short: 1, y: 1, longIsX: true };   // the model's own size at scale 1, after Turn / Tilt
+    const num = (id, d) => Math.min(500, Math.max(0.5, parseFloat($(id).value) || d));
+    const fmt1 = (v) => (Math.round(v * 10) / 10).toString();
+
+    function measure() {
+      holder.scale.setScalar(1); holder.position.set(0, 0, 0); holder.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(holder), size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+      nat = { long: Math.max(size.x, size.z, 1e-6), short: Math.max(Math.min(size.x, size.z), 1e-6), y: Math.max(size.y, 1e-6), longIsX: size.x >= size.z, box, c };
+    }
+    function fillFrom(field, value) {   // proportional: derive all three fields from one
+      const s = value / (field === "width" ? nat.long : field === "depth" ? nat.short : nat.y);
+      if (field !== "width") $("width").value = fmt1(nat.long * s);
+      if (field !== "depth") $("depth").value = fmt1(nat.short * s);
+      if (field !== "height") $("height").value = fmt1(nat.y * s);
+    }
+
+    // Recentre the model on the origin, put its base on the ground and size it as chosen. `reset` re-derives Depth/Height from Width.
+    function refit(resetCamera, reset = false) {
+      if (!holder) return;
+      measure();
+      if (reset) fillFrom("width", num("width", 40));
+      const kL = num("width", 40) / nat.long, kS = num("depth", 20) / nat.short, kY = num("height", 20) / nat.y;
+      const sx = nat.longIsX ? kL : kS, sz = nat.longIsX ? kS : kL;
+      holder.scale.set(sx, kY, sz);
+      holder.position.set(-nat.c.x * sx, -nat.box.min.y * kY, -nat.c.z * sz);
+      dims.set(nat.longIsX ? nat.long * kL : nat.short * kS, nat.y * kY, nat.longIsX ? nat.short * kS : nat.long * kL);
+      $("dims").textContent = `${dims.x.toFixed(1)} × ${dims.z.toFixed(1)} m footprint · ${dims.y.toFixed(1)} m tall`;
+      const R = Math.max(dims.x, dims.z) * 0.75 + 2;
+      ground.scale.setScalar(R); grid.scale.setScalar(R);
+      const reach = Math.max(dims.x, dims.y, dims.z);
+      sun.position.set(reach * 1.1, reach * 2, reach); sun.target.position.set(0, 0, 0);
+      const sc = sun.shadow.camera; const e = reach * 1.3;
+      sc.left = -e; sc.right = e; sc.top = e; sc.bottom = -e; sc.near = 1; sc.far = reach * 6; sc.updateProjectionMatrix();
+      controls.target.set(0, dims.y / 2, 0);
+      if (resetCamera) {
+        const dist = reach * 1.6 + 5;
+        camera.position.set(dist * 0.75, dims.y * 0.75 + dist * 0.25, dist * 0.8);
+        camera.near = Math.max(0.05, dist / 500); camera.far = dist * 40; camera.updateProjectionMatrix();
+      }
+      controls.update();
+    }
+
+    for (const f of ["width", "depth", "height"]) {
+      $(f).addEventListener("input", () => {
+        if (!holder) return;
+        if ($("keep").checked) { measure(); fillFrom(f, num(f, 20)); }
+        refit(false);
+      });
+    }
+    $("keep").addEventListener("change", () => { if ($("keep").checked && holder) refit(false, true); });
+    $("turn").addEventListener("click", () => { pivot?.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), Math.PI / 2); refit(false); });
+    $("tilt").addEventListener("click", () => { pivot?.rotateOnWorldAxis(new THREE.Vector3(1, 0, 0), Math.PI / 2); refit(true, true); });
+    $("spin").addEventListener("click", () => {
+      controls.autoRotate = !controls.autoRotate;
+      $("spin").textContent = "Spin: " + (controls.autoRotate ? "on" : "off");
+      $("spin").setAttribute("aria-pressed", String(controls.autoRotate));
+    });
+
+    // ---------- export: download, or hand over to the explorer ----------
+    function exportGlb() {
+      return new Promise((resolve, reject) => {
+        if (!holder) return reject(new Error("Nothing to export yet"));
+        holder.updateMatrixWorld(true);
+        new GLTFExporter().parse(holder, (res) => resolve(res), (err) => reject(err), { binary: true });
+      });
+    }
+    const safeName = () => (baseName.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") || "building").slice(0, 40);
+
+    $("download").addEventListener("click", async () => {
+      try {
+        const buf = await exportGlb();
+        const url = URL.createObjectURL(new Blob([buf], { type: "model/gltf-binary" }));
+        const a = document.createElement("a"); a.href = url; a.download = safeName() + ".glb";
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        toast("Saved " + safeName() + ".glb");
+      } catch (e) { console.error(e); toast("Couldn't export the model"); }
+    });
+
+    function putHandoff(rec) {
+      return new Promise((resolve, reject) => {
+        const rq = indexedDB.open("waypoint-handoff", 1);
+        rq.onupgradeneeded = () => rq.result.createObjectStore("kv");
+        rq.onerror = () => reject(rq.error);
+        rq.onsuccess = () => {
+          const db = rq.result, tx = db.transaction("kv", "readwrite");
+          tx.objectStore("kv").put(rec, "pending");
+          tx.oncomplete = () => { db.close(); resolve(); };
+          tx.onerror = tx.onabort = () => reject(tx.error || new Error("write failed"));
+        };
+      });
+    }
+    $("use").addEventListener("click", async () => {
+      const btn = $("use"); btn.disabled = true;
+      try {
+        const buf = await exportGlb();
+        await putHandoff({ name: safeName() + ".glb", buf, at: Date.now() });
+        location.href = "map-picker.html?from=converter";
+      } catch (e) {
+        console.error(e); btn.disabled = false;
+        toast("Couldn't hand the model to the explorer. Use Download .glb, then Upload in the explorer.", 4200);
+      }
+    });
+
+    // small hook for automated tests
+    window.__conv = { get dims() { return dims.clone(); }, refit, get holder() { return holder; } };
+  </script>
+</body>
+</html>

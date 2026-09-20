@@ -12,6 +12,7 @@ import pg from "pg";
 import dotenv from "dotenv";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 dotenv.config();
@@ -26,6 +27,16 @@ if (!process.env.GEMINI_API_KEY) {
       process.env.GEMINI_API_KEY = m[1];
       console.warn('Note: GEMINI_API_KEY in .env is not in plain NAME=value form. Using it anyway - tidy it to:  GEMINI_API_KEY=...');
     }
+  } catch { /* no .env next to server.js */ }
+}
+
+// Same forgiveness for the Baseten settings (BASETEN_API_KEY / BASETEN_MODEL_ID)
+for (const name of ["BASETEN_API_KEY", "BASETEN_MODEL_ID"]) {
+  if (process.env[name]) continue;
+  try {
+    const txt = fs.readFileSync(path.join(__dirname, ".env"), "utf8");
+    const m = txt.match(new RegExp("^\\s*(?:const\\s+|let\\s+|export\\s+)?" + name + "\\s*[=:]\\s*[\"'`]?\\s*([^\"'`\\s;,]+)", "m"));
+    if (m) { process.env[name] = m[1]; console.warn(`Note: ${name} in .env is not in plain NAME=value form. Using it anyway - tidy it to:  ${name}=...`); }
   } catch { /* no .env next to server.js */ }
 }
 
@@ -78,6 +89,18 @@ async function initSchema() {
   } catch (e) {
     console.warn("TimescaleDB not available here (" + e.message + ") - using a plain Postgres table. Tiger Data has it built in.");
   }
+  // imported 3D models (.glb): the file itself is kept here so teammates get the same buildings
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS models (
+      sha256     text PRIMARY KEY,               -- content hash: the same file uploaded twice is stored once
+      name       text NOT NULL,                  -- file name as imported, e.g. engineering_7.glb
+      size_bytes integer NOT NULL,
+      data       bytea NOT NULL,
+      scene_key  text,                           -- the scene it was first imported into
+      session_id text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )`);
+  await pool.query("CREATE INDEX IF NOT EXISTS models_name_created ON models (name, created_at DESC)");
   // unique indexes on a hypertable must include the time column
   await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS edits_entry_uniq ON edits (scene_key, entry_id, ts)");
   await pool.query("CREATE INDEX IF NOT EXISTS edits_scene_ts ON edits (scene_key, ts DESC)");
@@ -86,11 +109,12 @@ async function initSchema() {
 
 // ---------- app ----------
 const app = express();
-app.use(express.json({ limit: "5mb" }));
+app.use(express.json({ limit: "14mb" }));   // the image-to-3D route receives a base64 photo
 app.use((req, res, next) => {   // lets explorer.html opened from another origin (e.g. VS Code Live Server) use ?api=http://localhost:3000
   res.set("Access-Control-Allow-Origin", "*");
   res.set("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
   res.set("Access-Control-Allow-Headers", "Content-Type");
+  res.set("Access-Control-Expose-Headers", "X-Model-Format");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
@@ -369,8 +393,159 @@ app.post("/api/restyle-nearby", wrap(async (req, res) => {
   res.json({ looks, model: usedModel || "gemini (photo-based)" });
 }));
 
-// ---------- static files (only these three, so .env and server.js can never be served) ----------
-for (const f of ["explorer.html", "map-picker.html", "config.js"]) {
+
+// ---------- imported 3D models (.glb) are stored here so every teammate sees the same buildings ----------
+const MODEL_NAME_RE = /^[\w .()+-]{1,120}\.(glb|gltf)$/i;
+const MODEL_MAX = 25 * 1024 * 1024;
+const looksLikeModel = (b) => b.length > 20 && (b.subarray(0, 4).toString("latin1") === "glTF" || b[0] === 0x7b);   // binary glTF, or a .gltf JSON file
+
+// upload: raw file bytes in the body, ?name=file.glb&scene=lat,lng,radius&session=...
+app.post("/api/models", express.raw({ type: () => true, limit: MODEL_MAX }), wrap(async (req, res) => {
+  const name = String(req.query.name || "");
+  if (!MODEL_NAME_RE.test(name)) return res.status(400).json({ error: "name must be a .glb or .gltf file name" });
+  const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  if (!looksLikeModel(body)) return res.status(400).json({ error: "that does not look like a glTF/GLB file" });
+  const sha = crypto.createHash("sha256").update(body).digest("hex");
+  const r = await pool.query(
+    `INSERT INTO models (sha256, name, size_bytes, data, scene_key, session_id) VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (sha256) DO NOTHING`,
+    [sha, name, body.length, body, sceneOf(req.query.scene), typeof req.query.session === "string" ? req.query.session.slice(0, 80) : null]);
+  res.json({ ok: true, sha256: sha, name, size: body.length, existed: r.rowCount === 0 });
+}));
+
+// the shared library: newest first (file contents are not included)
+app.get("/api/models", wrap(async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT sha256, name, size_bytes, scene_key, session_id, created_at FROM models ORDER BY created_at DESC LIMIT 100`);
+  res.json(rows.map((r) => ({ sha256: r.sha256, name: r.name, size: r.size_bytes, scene: r.scene_key, session: r.session_id, ts: r.created_at.toISOString() })));
+}));
+
+// download: the newest file with that name (?name=), or one exact file (?sha=)
+app.get("/api/models/file", wrap(async (req, res) => {
+  const sha = typeof req.query.sha === "string" && /^[0-9a-f]{64}$/.test(req.query.sha) ? req.query.sha : null;
+  const name = typeof req.query.name === "string" ? req.query.name : null;
+  if (!sha && !name) return res.status(400).json({ error: "name or sha is required" });
+  const { rows } = sha
+    ? await pool.query("SELECT sha256, name, data FROM models WHERE sha256 = $1", [sha])
+    : await pool.query("SELECT sha256, name, data FROM models WHERE name = $1 ORDER BY created_at DESC LIMIT 1", [name]);
+  if (!rows.length) return res.status(404).json({ error: "no such model" });
+  res.set({ "Content-Type": "application/octet-stream", "X-Model-Sha": rows[0].sha256, "Access-Control-Expose-Headers": "X-Model-Sha", "Cache-Control": "no-store" });
+  res.send(rows[0].data);
+}));
+
+// remove a model from the shared library: every stored copy with that name (?name=), or one exact file (?sha=)
+app.delete("/api/models", wrap(async (req, res) => {
+  const sha = typeof req.query.sha === "string" && /^[0-9a-f]{64}$/.test(req.query.sha) ? req.query.sha : null;
+  const name = typeof req.query.name === "string" ? req.query.name : null;
+  if (!sha && !name) return res.status(400).json({ error: "name or sha is required" });
+  const r = sha
+    ? await pool.query("DELETE FROM models WHERE sha256 = $1", [sha])
+    : await pool.query("DELETE FROM models WHERE name = $1", [name]);
+  res.json({ ok: true, deleted: r.rowCount });
+}));
+
+// ---------- image -> 3D building (Baseten) ----------
+// converter.html sends a photo here; we forward it to a model deployed on Baseten (see baseten-truss/) and hand the
+// resulting .glb back. The Baseten key stays on the server, and Baseten's API cannot be called from a browser anyway.
+const basetenUrl = () => {
+  const id = (process.env.BASETEN_MODEL_ID || "").trim();
+  if (process.env.BASETEN_URL) return process.env.BASETEN_URL.trim();           // full override, e.g. a dedicated deployment URL
+  const env = (process.env.BASETEN_ENVIRONMENT || "production").trim();
+  return `https://model-${id}.api.baseten.co/environments/${env}/predict`;
+};
+const basetenConfigured = () => !!(process.env.BASETEN_API_KEY && (process.env.BASETEN_MODEL_ID || process.env.BASETEN_URL));
+
+app.get("/api/baseten-status", (req, res) => res.json({ configured: basetenConfigured() }));
+
+const b64ToBuf = (s) => Buffer.from(String(s).replace(/^data:[^,]*,/, ""), "base64");
+const findFirst = (obj, keys) => { for (const k of keys) if (obj && obj[k] != null && obj[k] !== "") return [k, obj[k]]; return null; };
+
+// Turn whatever the deployed model returned into { bytes, format }. Accepts a raw GLB body, or JSON such as
+// { glb_base64 } / { model_base64, format } / { model_url } / { output: {...} }.
+async function readBasetenModel(r) {
+  const ctype = r.headers.get("content-type") || "";
+  if (!/json|text/i.test(ctype)) {
+    const bytes = Buffer.from(await r.arrayBuffer());
+    const format = bytes.slice(0, 4).toString() === "glTF" ? "glb" : (r.headers.get("x-model-format") || "obj");
+    return { bytes, format };
+  }
+  let j = await r.json();
+  if (typeof j === "string") { try { j = JSON.parse(j); } catch { /* plain string */ } }
+  if (j && typeof j === "object" && j.output && typeof j.output === "object") j = j.output;
+  if (j && typeof j === "object" && j.data && typeof j.data === "object") j = j.data;
+  if (typeof j === "string") j = { model_base64: j };
+  if (j && typeof j.error === "string" && j.error) throw new Error(j.error);
+  const glb = findFirst(j, ["glb_base64", "glb"]);
+  if (glb) return { bytes: b64ToBuf(glb[1]), format: "glb" };
+  const any = findFirst(j, ["model_base64", "model", "mesh_base64", "mesh", "obj_base64", "obj", "base64"]);
+  if (any) {
+    const bytes = b64ToBuf(any[1]);
+    const format = bytes.slice(0, 4).toString() === "glTF" ? "glb" : String(j.format || (any[0].startsWith("obj") ? "obj" : "obj")).toLowerCase();
+    return { bytes, format };
+  }
+  const url = findFirst(j, ["model_url", "glb_url", "url", "mesh_url"]);
+  if (url && /^https:\/\//i.test(url[1])) {
+    const m = await fetch(url[1]);
+    if (!m.ok) throw new Error(`Could not download the generated model (HTTP ${m.status}).`);
+    const bytes = Buffer.from(await m.arrayBuffer());
+    return { bytes, format: bytes.slice(0, 4).toString() === "glTF" ? "glb" : (/\.obj(\?|$)/i.test(url[1]) ? "obj" : "glb") };
+  }
+  throw new Error("Baseten replied, but not with a 3D model. Expected a field like glb_base64 in the response - check baseten-truss/model/model.py.");
+}
+
+app.post("/api/image-to-3d", wrap(async (req, res) => {
+  if (!basetenConfigured()) {
+    return res.status(503).json({ error: "Baseten is not set up yet. Add BASETEN_API_KEY and BASETEN_MODEL_ID to .env and restart the server (see baseten-truss/README.md)." });
+  }
+  const image = req.body?.image;
+  if (typeof image !== "string" || !/^data:image\/(png|jpe?g|webp);base64,/i.test(image)) {
+    return res.status(400).json({ error: "Send the photo as a PNG, JPEG or WebP data URL in the 'image' field." });
+  }
+  const o = req.body?.options || {};
+  const payload = {
+    image,
+    remove_background: o.removeBackground !== false,
+    mc_resolution: Math.min(512, Math.max(64, parseInt(o.resolution, 10) || 256)),
+    foreground_ratio: 0.85,
+  };
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 280000);
+  let r;
+  try {
+    r = await fetch(basetenUrl(), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.BASETEN_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: ctl.signal,
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    if (e.name === "AbortError") return res.status(504).json({ error: "Baseten took longer than 4½ minutes. If the model was asleep it may be ready now - try again." });
+    return res.status(502).json({ error: "Could not reach Baseten: " + (e.cause?.code || e.message) });
+  }
+  clearTimeout(timer);
+  if (!r.ok) {
+    const body = (await r.text().catch(() => "")).slice(0, 300);
+    console.warn("Baseten HTTP", r.status, body);
+    const msg =
+      r.status === 401 || r.status === 403 ? "Baseten rejected the API key. Check BASETEN_API_KEY in .env." :
+      r.status === 404 ? "Baseten could not find that model. Check BASETEN_MODEL_ID in .env, and that the model is deployed (truss push)." :
+      r.status === 429 ? "Baseten is rate-limiting this request. Wait a moment and try again." :
+      r.status >= 500 ? "The model is starting up or crashed on Baseten. The first request after idle can take a few minutes - try again shortly." :
+      `Baseten returned HTTP ${r.status}.`;
+    return res.status(r.status === 401 || r.status === 403 || r.status === 404 ? 502 : r.status >= 500 ? 503 : r.status).json({ error: msg, detail: body });
+  }
+  let out;
+  try { out = await readBasetenModel(r); } catch (e) { return res.status(502).json({ error: e.message }); }
+  if (!out.bytes.length) return res.status(502).json({ error: "Baseten returned an empty model." });
+  res.set("Content-Type", out.format === "glb" ? "model/gltf-binary" : "application/octet-stream");
+  res.set("X-Model-Format", out.format);
+  res.set("Access-Control-Expose-Headers", "X-Model-Format");
+  res.send(out.bytes);
+}));
+
+// ---------- static files (only these four, so .env and server.js can never be served) ----------
+for (const f of ["explorer.html", "map-picker.html", "converter.html", "config.js"]) {
   app.get("/" + f, (req, res) => {
     res.set("Cache-Control", "no-store");
     res.sendFile(path.join(__dirname, f), (err) => { if (err && !res.headersSent) res.status(404).send("Not found: " + f); });
@@ -387,5 +562,8 @@ initSchema()
     console.log(process.env.GEMINI_API_KEY
   ? "Gemini key: found (AI restyle is ready)"
   : `Gemini key: NOT FOUND - add a line  GEMINI_API_KEY=...  to ${path.join(process.cwd(), ".env")}  (no 'const', no quotes), save, and restart.`);
+    console.log(basetenConfigured()
+  ? "Baseten: configured (image-to-3D converter is ready)"
+  : "Baseten: not configured - the image-to-3D page will ask you to add BASETEN_API_KEY and BASETEN_MODEL_ID to .env (see baseten-truss/README.md).");
   }))
   .catch((err) => { console.error("Could not connect to / set up the database:", err.message); process.exit(1); });

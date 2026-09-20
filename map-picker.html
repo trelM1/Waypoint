@@ -228,6 +228,17 @@
     #startBtn:hover svg { transform: translateX(3px); }
     #startBtn svg { transition: transform 0.12s; }
     #startBtn:focus-visible { outline: 3px solid rgba(29, 143, 225, 0.4); outline-offset: 3px; }
+    #start .choices { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; align-items: center; }
+    #convertBtn {
+      display: inline-flex; align-items: center; gap: 10px; text-decoration: none;
+      padding: 14px 34px; border-radius: 999px; cursor: pointer;
+      background: #fff; color: var(--accent-dark); border: 2px solid var(--accent);
+      font-size: 16px; font-weight: 700; font-family: inherit; letter-spacing: 0.02em;
+      box-shadow: 0 6px 18px rgba(20, 32, 43, 0.08);
+      transition: background 0.12s, color 0.12s, transform 0.12s, box-shadow 0.12s;
+    }
+    #convertBtn:hover { background: var(--accent); color: #fff; transform: translateY(-2px); box-shadow: 0 12px 26px rgba(29, 143, 225, 0.32); }
+    #convertBtn:focus-visible { outline: 3px solid rgba(29, 143, 225, 0.4); outline-offset: 3px; }
     #start .press { margin-top: 16px; font-size: 12px; color: #98a6b3; }
     #start .press kbd { background: #e6edf3; color: var(--muted); }
   </style>
@@ -290,9 +301,12 @@
       <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>
     </div>
     <h1>WAYPOINT</h1>
-    <p class="tag">Explore Kitchener&ndash;Waterloo in 3D, then delete buildings and swap in your own.</p>
-    <button id="startBtn">Start <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
-    <div class="press">or press <kbd>Enter &crarr;</kbd></div>
+    <p class="tag">Explore Kitchener&ndash;Waterloo in 3D, delete buildings and swap in your own &ndash; or turn a photo of a building into a 3D model.</p>
+    <div class="choices">
+    <button id="startBtn">Explore the map <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+    <a id="convertBtn" href="converter.html"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg> Image &rarr; 3D</a>
+    </div>
+    <div class="press">or press <kbd>Enter &crarr;</kbd> to explore</div>
   </div>
 
   <script src="config.js"></script>
@@ -713,6 +727,13 @@
       $("startBtn").blur();
     }
     $("startBtn").addEventListener("click", startApp);
+
+    // coming back from the image-to-3D page: skip the start screen and remind the user where the model went
+    if (new URLSearchParams(location.search).get("from") === "converter") {
+      startApp();
+      history.replaceState(null, "", location.pathname);
+      setTimeout(() => toast("Your 3D model is saved. Pick an area, then press R in the explorer to replace a building"), 400);
+    }
 
     window.addEventListener("keydown", (e) => {
       const typing = e.target && e.target.id === "search";

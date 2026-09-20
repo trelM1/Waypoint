@@ -80,6 +80,7 @@
     #ui button.secondary:hover:not(:disabled) { background: var(--soft); border-color: #cfdae4; }
     #ui button.danger { background: #fdeeee; color: var(--danger); }
     #ui button.danger:hover:not(:disabled) { background: #fbdcdc; }
+    #ui button.armed, #ui button.armed:hover:not(:disabled) { background: var(--danger); color: #fff; border-color: var(--danger); }
     #ui .row { display: flex; gap: 8px; }
     #ui .row button { margin-top: 8px; }
     kbd {
@@ -171,12 +172,46 @@
     }
     #attribution a { color: #fff; text-decoration: none; }
     #attribution a:hover { text-decoration: underline; }
+    /* close / reopen the edit menu */
+    #ui .head .iconbtn {
+      width: 28px; height: 28px; min-width: 28px; margin: 0 0 0 auto; padding: 0; flex: none;
+      display: grid; place-items: center; border-radius: 8px; border: 0; cursor: pointer;
+      background: transparent; color: var(--muted);
+    }
+    #ui button.iconbtn:hover:not(:disabled) { background: var(--soft); color: var(--ink); }
+    body.menuHidden #ui { display: none; }
+    #menuOpen {
+      position: absolute; top: 16px; right: 16px; z-index: 3; display: none; align-items: center; gap: 7px;
+      padding: 8px 14px 8px 11px; border: 0; cursor: pointer; font-family: inherit;
+      background: rgba(255,255,255,0.92); color: var(--ink); border-radius: 999px; font-size: 13px; font-weight: 600;
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      box-shadow: 0 4px 16px rgba(20,32,43,0.18), 0 1px 2px rgba(20,32,43,0.12);
+      transition: transform .12s, box-shadow .12s;
+    }
+    #menuOpen:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(20,32,43,0.24), 0 1px 2px rgba(20,32,43,0.12); }
+    #menuOpen kbd { font: inherit; font-size: 10.5px; padding: 1px 6px; border-radius: 5px; background: #e6edf3; color: var(--muted); }
+    body.menuHidden #menuOpen { display: inline-flex; }
+
+    /* link to the image-to-3D page (bottom-left, above the map credit) */
+    #convertLink {
+      position: absolute; left: 16px; bottom: 40px; z-index: 2;
+      display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px 9px 12px;
+      background: var(--accent); color: #fff; border-radius: 999px;
+      font-size: 13px; font-weight: 700; text-decoration: none;
+      box-shadow: 0 6px 18px rgba(29,143,225,0.4), 0 1px 2px rgba(20,32,43,0.2);
+      transition: transform .12s, background .12s;
+    }
+    #convertLink:hover { background: var(--accent-dark); transform: translateY(-1px); }
+    #convertLink svg { flex: none; }
     @media (max-width: 600px) { #ui { width: auto; left: 16px; top: 64px; max-height: calc(100% - 80px); } }
   </style>
 </head>
 <body>
   <div id="crosshair"></div>
   <a id="backLink" href="map-picker.html"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>Back to picker</a>
+
+  <button id="menuOpen" type="button" title="Show menu (H)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>Menu <kbd>H</kbd></button>
+  <a id="convertLink" href="converter.html" title="Turn a photo of a building into a 3D model"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>Image &rarr; 3D</a>
 
   <div id="ui">
     <div class="head">
@@ -187,6 +222,7 @@
         <h2>Edit buildings</h2>
         <p class="sub">Aim the crosshair, then click</p>
       </div>
+      <button id="menuClose" class="iconbtn" type="button" title="Close menu (H)" aria-label="Close menu"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>
 
     <div class="pad">
@@ -195,6 +231,7 @@
         <button id="btnDelete" class="danger">Delete <kbd>X</kbd></button>
         <button id="btnUndo" class="secondary">Undo <kbd>Z</kbd></button>
       </div>
+      <button id="btnRevertAll" class="secondary" title="Put every building back the way it was on the original map">Revert to original map</button>
     </div>
 
     <details class="sec" open>
@@ -205,8 +242,10 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>
           <span class="ftext">Choose .glb file(s)</span>
         </label>
+        <label class="field" id="sharedRow" style="display:none">Shared library <select id="sharedModels"><option value="">Load a teammate's model…</option></select></label>
         <div id="modelPreview"><canvas id="modelPreviewCanvas"></canvas><div class="cap"><span id="mpName"></span><span id="mpSize"></span></div></div>
         <label class="field">Active model <select id="modelSelect"><option value="">(none loaded)</option></select></label>
+        <button id="btnDeleteModel" class="danger" title="Remove the active model from this list and from the shared library" disabled>Delete this model</button>
         <label class="field">Fit
           <select id="fitMode">
             <option value="uniform">Fit footprint (keep shape)</option>
@@ -278,7 +317,7 @@
     // =====================================================================
     // 1. Read the selection passed in from the picker
     // =====================================================================
-    console.log("explorer.html v6.5 (live teammate sync; one-click AI restyle of the nearest buildings; edit log + Tiger Data sync;satellite ground, detailed buildings, sturdier map-data loading)");
+    console.log("explorer.html v6.8 (imported models are stored in Tiger Data and shared; menu can be closed with the x or H; Image -> 3D link; imports models from the converter; live teammate sync; one-click AI restyle of the nearest buildings; edit log + Tiger Data sync;satellite ground, detailed buildings, sturdier map-data loading)");
     const params = new URLSearchParams(window.location.search);
     let centerLat = parseFloat(params.get("lat"));
     let centerLng = parseFloat(params.get("lng"));
@@ -2179,10 +2218,18 @@
     const gltfLoader = new GLTFLoader();
     const modelLib = new Map(); // file name -> { root, size, offset }
 
-    async function addModelFile(file) {
-      const buf = await file.arrayBuffer();
-      const gltf = await gltfLoader.parseAsync(buf, "");
-      gltf.scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    // parse a model from bytes (a local file, or one downloaded from the shared library) and add it to the library
+    async function addModelBuffer(name, buf, source = "file", activate = true, quiet = false) {
+      const gltf = await gltfLoader.parseAsync(buf.slice(0), "");
+      gltf.scene.traverse((o) => {
+        if (!o.isMesh) return;
+        o.castShadow = true; o.receiveShadow = true;
+        // models with no material (e.g. from the image-to-3D converter) would render black (glTF default = fully metallic) and faceted
+        if (!o.geometry.attributes.normal) o.geometry.computeVertexNormals();
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+          if (m && m.isMeshStandardMaterial && !m.metalnessMap) { m.metalness = 0; m.roughness = Math.max(m.roughness, 0.85); m.needsUpdate = true; }
+        }
+      });
 
       const root = new THREE.Group();
       root.add(gltf.scene);
@@ -2197,13 +2244,21 @@
       }
       const c = box.getCenter(new THREE.Vector3());
       // offset: puts the model's footprint centre at the origin and its base on y = 0
-      modelLib.set(file.name, { root, size, offset: new THREE.Vector3(-c.x, -box.min.y, -c.z) });
+      modelLib.set(name, { root, size, offset: new THREE.Vector3(-c.x, -box.min.y, -c.z) });
 
-      refreshModelSelect(file.name);
+      refreshModelSelect(activate ? name : undefined);
       rebuildPlacements();      // placements that were waiting for this file appear now
       updateHighlight();
       updateUI();
-      toast(`Loaded ${file.name} (${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)} m)`);
+      renderSharedModels();
+      if (!quiet) toast(source === "shared" ? `Loaded ${name} from the shared library` : `Loaded ${name} (${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)} m)`);
+    }
+
+    async function addModelFile(file) {
+      const buf = await file.arrayBuffer();
+      deletedModels.delete(file.name);
+      await addModelBuffer(file.name, buf, "file");
+      queueModelUpload(file.name, buf);      // also keep it in Tiger Data so teammates get the same building
     }
 
     // ---- spinning preview of the active model (its own small renderer; only runs while visible) ----
@@ -2272,6 +2327,7 @@
       }
       if (modelLib.has(current)) sel.value = current;
       showModelPreview(modelLib.has(sel.value) ? sel.value : "");
+      const b = $("btnDeleteModel"); if (b) b.disabled = !modelLib.has(sel.value);
     }
 
     function computeScale(size, info, mode, heightOverride) {
@@ -2660,6 +2716,10 @@
       if (applied) { applyState(state); afterChange(); }
       saveLog(); renderLog();
       toast(entries.length === 1 ? "Teammate: " + entries[0].label : entries.length + " new edits from teammates");
+      fetchMissingModels();
+      if (entries.some((x) => x.action === "import_model")) refreshSharedModels();
+      for (const x of entries) if (x.action === "delete_model" && x.targetId && modelLib.has(x.targetId)) forgetModelLocally(x.targetId);
+      if (entries.some((x) => x.action === "delete_model")) refreshSharedModels();
     }
 
     async function pollRemote() {
@@ -2688,6 +2748,7 @@
         return;
       }
       sync.on = true;
+      flushModelUploads(); refreshSharedModels();
       await flushSync();                       // push anything made while offline
       if (editLog.entries.some((e) => !e.synced)) return;   // couldn't push; stay local for now
       try {
@@ -2702,7 +2763,147 @@
         setBadge("Tiger Data · synced", "ok");
       } catch (e) { console.warn("Could not load the edit log from the server.", e); setBadge("offline · retrying", "warn"); }
       renderLog();
+      flushModelUploads(); fetchMissingModels(); refreshSharedModels();
     }
+
+    // ---- imported models live in Tiger Data too: upload what you import, download what a teammate placed ----
+    const modelUploads = new Map();      // file name -> bytes waiting to be stored
+    const modelTried = new Map();        // file name -> when a download last failed (so we do not hammer the server)
+    let sharedModels = [], uploadingModels = false, fetchingModels = false;
+    const mb = (n) => (n / 1048576).toFixed(1) + " MB";
+
+    function queueModelUpload(name, buf) {
+      if (API === null) return;
+      modelUploads.set(name, buf);
+      flushModelUploads();
+    }
+
+    async function flushModelUploads() {
+      if (!sync.on || uploadingModels || !modelUploads.size) return;
+      uploadingModels = true;
+      try {
+        for (const [name, buf] of [...modelUploads]) {
+          const r = await fetch(`${API}/api/models?name=${encodeURIComponent(name)}&scene=${encodeURIComponent(SCENE_KEY)}&session=${encodeURIComponent(SESSION_ID)}`,
+            { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: buf });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            if (r.status >= 400 && r.status < 500) { modelUploads.delete(name); console.warn("Model not stored:", j.error); continue; }   // will never succeed
+            throw new Error(j.error || "HTTP " + r.status);
+          }
+          modelUploads.delete(name);
+          if (!j.existed) logEdit({ action: "import_model", label: `Imported model ${name} (${mb(j.size)})` }, clone(serialize()));   // shows up in everyone's history
+          refreshSharedModels();
+        }
+      } catch (err) { console.warn("Model upload failed - will retry.", err); }
+      finally { uploadingModels = false; }
+    }
+
+    async function loadSharedModel(name, activate = false, quiet = false) {
+      const r = await fetch(`${API}/api/models/file?name=${encodeURIComponent(name)}`);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      await addModelBuffer(name, await r.arrayBuffer(), "shared", activate, quiet);
+    }
+
+    // Bring the shared library into this browser: the models placed in this scene first, then the newest imports
+    // (so a reload, or a teammate's machine, shows the same buildings without re-importing anything).
+    async function fetchMissingModels() {
+      if (API === null || !sync.on || fetchingModels) return;
+      const placed = placements.map((p) => p.modelName);
+      const seen = new Set(), library = sharedModels.filter((m) => !seen.has(m.name) && seen.add(m.name)).slice(0, 20).map((m) => m.name);
+      const names = [...new Set([...placed, ...library])].filter((n) => !modelLib.has(n) && !deletedModels.has(n) && Date.now() - (modelTried.get(n) || 0) > 20000);
+      if (!names.length) return;
+      fetchingModels = true;
+      let loaded = 0;
+      try {
+        for (const n of names) {
+          try { await loadSharedModel(n, false, true); modelTried.delete(n); loaded++; }
+          catch (err) { modelTried.set(n, Date.now()); }     // not uploaded yet: try again in a bit
+        }
+      } finally { fetchingModels = false; }
+      if (loaded) toast(loaded === 1 ? `Loaded ${names.find((n) => modelLib.has(n))} from the shared library` : `Loaded ${loaded} models from the shared library`);
+    }
+
+    function renderSharedModels() {
+      const sel = $("sharedModels"), row = $("sharedRow");
+      if (!sel || !row) return;
+      const seen = new Set(), items = sharedModels.filter((m) => !seen.has(m.name) && seen.add(m.name));   // newest file per name
+      sel.innerHTML = "";
+      const ph = document.createElement("option"); ph.value = ""; ph.textContent = `Shared library (${items.length})…`; sel.appendChild(ph);
+      for (const m of items) {
+        const o = document.createElement("option"); o.value = m.name;
+        o.textContent = `${m.name} · ${mb(m.size)}${modelLib.has(m.name) ? " \u2713" : ""}`;
+        sel.appendChild(o);
+      }
+      row.style.display = items.length ? "" : "none";
+    }
+
+    async function refreshSharedModels() {
+      if (API === null || !sync.on) return;
+      try { sharedModels = (await apiCall("/api/models", {}, 6000)).filter((m) => !deletedModels.has(m.name)); renderSharedModels(); fetchMissingModels(); } catch (err) { /* older server or offline */ }
+    }
+
+    setInterval(() => { if (sync.on && !document.hidden) { flushModelUploads(); fetchMissingModels(); } }, 4000);
+
+    // ---- delete an imported model (from this browser and from the shared library in Tiger Data) ----
+    const deletedModels = new Set();     // names removed this session, so a stale list never brings them back
+
+    function forgetModelLocally(name) {
+      deletedModels.add(name);
+      modelUploads.delete(name);
+      modelTried.delete(name);
+      sharedModels = sharedModels.filter((m) => m.name !== name);
+      const m = modelLib.get(name);
+      if (m) {
+        modelLib.delete(name);
+        m.root.traverse((o) => {
+          if (o.geometry) o.geometry.dispose();
+          for (const mat of Array.isArray(o.material) ? o.material : o.material ? [o.material] : []) {
+            for (const v of Object.values(mat)) if (v && v.isTexture) v.dispose();
+            mat.dispose();
+          }
+        });
+      }
+      refreshModelSelect();
+      renderSharedModels();
+      rebuildPlacements();
+      updateHighlight();
+      updateUI();
+    }
+
+    async function deleteModel(name) {
+      if (!name || !modelLib.has(name)) return toast("No model selected");
+      if (replaying) return toast("Replay is running - press Stop replay first");
+      if (API !== null && sync.on) {
+        try { await apiCall(`/api/models?name=${encodeURIComponent(name)}`, { method: "DELETE" }, 8000); }
+        catch (err) { return toast("Couldn't delete " + name + " from Tiger Data: " + err.message); }
+      }
+      const used = placements.filter((p) => p.modelName === name).length;
+      const label = `Deleted model ${name}` + (used ? ` (and ${used} placed cop${used === 1 ? "y" : "ies"})` : "");
+      const meta = { action: "delete_model", targetId: name, label };
+      if (used) {
+        mutate(() => { placements = placements.filter((p) => p.modelName !== name); }, meta);
+      } else {
+        logEdit(meta, clone(serialize()));
+      }
+      forgetModelLocally(name);
+      toast(label);
+    }
+
+    // a button that asks "are you sure?" by turning red for a few seconds instead of opening a browser dialog
+    function twoStep(btn, armedText, run) {
+      let timer = 0, original = btn.textContent;
+      const disarm = () => { clearTimeout(timer); timer = 0; btn.textContent = original; btn.classList.remove("armed"); };
+      btn.addEventListener("click", () => {
+        if (btn.disabled) return;
+        if (timer) { disarm(); run(); return; }
+        original = btn.textContent;
+        btn.textContent = typeof armedText === "function" ? armedText() : armedText;
+        btn.classList.add("armed");
+        timer = setTimeout(disarm, 5000);
+      });
+      btn.addEventListener("blur", () => { if (timer) disarm(); });
+    }
+
 
     // ---- selection highlight ----
     let highlight = null;
@@ -2984,6 +3185,9 @@
       const customs = [...buildings.keys()].filter((id) => id.startsWith("custom-")).length;
       $("counts").textContent = `${buildings.size - customs} OSM buildings · ${removed.size} removed · ${customs} custom · ${placements.length} models`;
 
+      $("btnRevertAll").disabled = !hasEdits();
+      $("btnDeleteModel").disabled = !$("modelSelect").value;
+
       const waiting = {};
       for (const p of placements) if (!modelLib.has(p.modelName)) waiting[p.modelName] = (waiting[p.modelName] || 0) + 1;
       const names = Object.keys(waiting);
@@ -2995,8 +3199,27 @@
     // ---- panel wiring ----
     $("btnDelete").onclick = deleteSelected;
     $("btnUndo").onclick = undo;
+
+    // one click back to the original map: every removed building returns, custom blocks / models / AI looks go away (Undo still works)
+    function revertAll() {
+      if (!hasEdits()) return toast("Nothing to revert - the map is already original");
+      mutate(() => applyState({ removed: [], customs: [], restyled: {}, placements: [] }), { action: "revert", label: "Reverted to: the original scene" });
+      selected = null; updateHighlight(); updateUI();
+      toast("Back to the original map (Undo to bring your edits back)");
+    }
+    function hasEdits() {
+      return removed.size > 0 || placements.length > 0 || Object.keys(restyled).length > 0 || [...buildings.keys()].some((id) => id.startsWith("custom-"));
+    }
+    twoStep($("btnRevertAll"), () => "Click again to revert everything", revertAll);
+    twoStep($("btnDeleteModel"), () => `Click again to delete ${$("modelSelect").value}`, () => deleteModel($("modelSelect").value));
     $("btnReplaceModel").onclick = replaceWithModel;
-    $("modelSelect").addEventListener("change", () => showModelPreview($("modelSelect").value));
+    $("modelSelect").addEventListener("change", () => { showModelPreview($("modelSelect").value); $("btnDeleteModel").disabled = !$("modelSelect").value; });
+    $("sharedModels").addEventListener("change", async (ev) => {
+      const name = ev.target.value; ev.target.value = "";
+      if (!name) return;
+      if (modelLib.has(name)) { refreshModelSelect(name); return toast(`${name} is already loaded`); }
+      try { await loadSharedModel(name, true); } catch (err) { toast("Couldn't download " + name); }
+    });
     $("btnPlaceModel").onclick = placeModel;
     $("btnReplay").onclick = replayLog;
     $("btnLogClear").onclick = clearLog;
@@ -3007,6 +3230,37 @@
       }
       e.target.value = "";
     });
+
+    // ---- close / reopen the edit menu (remembered between visits) ----
+    function setMenuHidden(hide, remember = true) {
+      document.body.classList.toggle("menuHidden", hide);
+      if (remember) { try { localStorage.setItem("waypoint:menuHidden", hide ? "1" : "0"); } catch { /* storage blocked */ } }
+    }
+    function toggleMenu() { setMenuHidden(!document.body.classList.contains("menuHidden")); }
+    $("menuClose").addEventListener("click", () => setMenuHidden(true));
+    $("menuOpen").addEventListener("click", () => setMenuHidden(false));
+    try { if (localStorage.getItem("waypoint:menuHidden") === "1") setMenuHidden(true, false); } catch { /* ignore */ }
+
+    // ---- a model sent over from converter.html ("Use in explorer") waits in IndexedDB ----
+    async function loadPendingModel() {
+      let rec = null;
+      try {
+        const db = await new Promise((res, rej) => {
+          const rq = indexedDB.open("waypoint-handoff", 1);
+          rq.onupgradeneeded = () => rq.result.createObjectStore("kv");
+          rq.onsuccess = () => res(rq.result);
+          rq.onerror = () => rej(rq.error);
+        });
+        rec = await new Promise((res, rej) => { const rq = db.transaction("kv").objectStore("kv").get("pending"); rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); });
+        if (rec) await new Promise((res) => { const tx = db.transaction("kv", "readwrite"); tx.objectStore("kv").delete("pending"); tx.oncomplete = tx.onerror = () => res(); });
+        db.close();
+      } catch (e) { console.warn("No converter hand-off available.", e); return; }
+      if (!rec || !rec.buf) return;
+      try {
+        await addModelFile(new File([rec.buf], rec.name || "converted-building.glb"));
+        toast("Your converted model is in the library. Aim at a building and press R to replace it, or P to place it");
+      } catch (e) { console.error(e); toast("Couldn't load the converted model"); }
+    }
 
     // ---- start-up: restore autosaved edits, then fetch the map, terrain and imagery ----
     try {
@@ -3019,6 +3273,7 @@
     loadLog();
     renderLog();
     initSync();           // Tiger Data server (if running): push offline edits, then load the shared log
+    loadPendingModel();
 
     loadSatellite();
     loadTerrain().catch((err) => console.warn("Terrain failed - staying flat.", err));
@@ -3035,7 +3290,7 @@
 
     // Click: first click captures the mouse; later clicks select what the crosshair is on.
     document.addEventListener("click", (e) => {
-      if (e.target.closest("#ui, #backLink, #attribution")) return;
+      if (e.target.closest("#ui, #backLink, #attribution, #convertLink, #menuOpen")) return;
       if (!controls.isLocked) { controls.lock(); return; }
       selected = pick();
       updateHighlight();
@@ -3056,6 +3311,8 @@
     const speed = 60;
 
     document.addEventListener("keydown", (e) => {
+      // H shows / hides the menu (also while looking around; ignored when typing in a field)
+      if (e.code === "KeyH" && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey && !/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName || "")) { toggleMenu(); return; }
       switch (e.code) {
         case "KeyW": move.forward = true; break;
         case "KeyS": move.back = true; break;
