@@ -1,0 +1,39 @@
+# TripoSR (single image -> textured 3D mesh) packaged for Baseten.
+# Deploy with:   pip install --upgrade truss   then   truss login   then   truss push
+model_name: waypoint-triposr
+python_version: py310
+
+requirements:
+  - torch==2.1.2
+  - torchvision==0.16.2
+  - "numpy<2"
+  - omegaconf==2.3.0
+  - Pillow==10.1.0
+  - einops==0.7.0
+  - transformers==4.35.0
+  - trimesh==4.0.5
+  - huggingface-hub
+  - rembg
+  - onnxruntime
+  - xatlas==0.0.9
+  - moderngl==5.10.0
+  - imageio[ffmpeg]
+  - scikit-image
+
+system_packages:
+  - git
+  - build-essential
+  - libgl1
+  - libglib2.0-0
+
+# Runs while the image is built (after the requirements above are installed).
+build_commands:
+  # TripoSR is not on PyPI: its code is imported straight from this clone (see model/model.py)
+  - git clone --depth 1 https://github.com/VAST-AI-Research/TripoSR /app/TripoSR
+
+resources:
+  accelerator: L4        # 24 GB is plenty for TripoSR. A10G or T4 also work (T4 is slower)
+  use_gpu: true
+
+environment_variables:
+  HF_HOME: /app/hf-cache
