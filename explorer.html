@@ -48,6 +48,29 @@
     }
     #ui button:not(.secondary) kbd { background: rgba(255,255,255,0.28); }
     #pending { margin-top: 8px; color: #b45309; font-size: 11.5px; }
+
+    /* ---------- edit history ---------- */
+    #ui h3 .badge {
+      float: right; text-transform: none; letter-spacing: 0; font-weight: 600; font-size: 10.5px;
+      padding: 1px 7px; border-radius: 999px; background: #e9eff5; color: #6b7a89;
+    }
+    #ui h3 .badge.ok { background: #dcf3e4; color: #1a7a43; }
+    #ui h3 .badge.warn { background: #fdebd0; color: #b45309; }
+    #logList { max-height: 230px; overflow-y: auto; margin-top: 6px; border: 1px solid #e3e9ef; border-radius: 8px; background: #f4f8fb; }
+    #logList .empty { padding: 10px; color: #6b7a89; font-size: 11.5px; }
+    .logRow { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid #e3e9ef; }
+    .logRow:last-child { border-bottom: 0; }
+    .logRow.latest { background: #eaf4fc; }
+    .logRow .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: #94a3b1; }
+    .logRow .dot.delete { background: #e5484d; } .logRow .dot.replace { background: #1d8fe1; }
+    .logRow .dot.place { background: #2fa866; } .logRow .dot.revert, .logRow .dot.undo { background: #e0a018; }
+    .logRow .txt { flex: 1; min-width: 0; line-height: 1.3; }
+    .logRow .txt b { font-weight: 600; word-break: break-word; }
+    .logRow .t { color: #6b7a89; font-size: 10.5px; }
+    #ui .logRow button { width: auto; margin: 0; padding: 3px 7px; font-size: 11px; display: inline-block; flex: none; background: #e9eff5; color: #14202b; }
+    #ui .logRow button:hover { background: #dbe5ee; }
+    #ui .logRow button:disabled { opacity: .4; cursor: default; }
+    #logCount { font-weight: 400; }
     #toast {
       position: absolute; bottom: 24px; left: 50%; transform: translate(-50%, 10px); opacity: 0;
       background: #14202b; color: #fff; font-size: 13px; padding: 9px 16px; border-radius: 999px;
@@ -61,16 +84,6 @@
     }
     #attribution a { color: #fff; text-decoration: none; }
     #attribution a:hover { text-decoration: underline; }
-
-    .model-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 6px 0; }
-    .model-thumb {
-      display: flex; flex-direction: column; align-items: center; cursor: pointer;
-      border: 2px solid transparent; border-radius: 8px; padding: 4px; background: #f4f8fb;
-    }
-    .model-thumb:hover { background: #eaf1f7; }
-    .model-thumb.active { border-color: #1d8fe1; background: #eaf4fc; }
-    .model-thumb canvas { width: 100%; aspect-ratio: 1; border-radius: 6px; display: block; }
-    .model-thumb span { font-size: 11px; margin-top: 4px; text-align: center; word-break: break-word; line-height: 1.2; }
   </style>
 </head>
 <body>
@@ -83,18 +96,43 @@
     <div class="row">
       <button id="btnDelete">Delete <kbd>X</kbd></button>
       <button id="btnUndo" class="secondary">Undo <kbd>Z</kbd></button>
-      <button id="btnPreviewReal" class="secondary">See it for real <kbd>V</kbd></button>
     </div>
 
     <h3>3D model (.glb)</h3>
     <input type="file" id="modelFile" accept=".glb,.gltf" multiple>
-    <div id="modelGrid" class="model-grid"></div>
+    <label>Active model <select id="modelSelect"><option value="">(none loaded)</option></select></label>
+    <label>Fit
+      <select id="fitMode">
+        <option value="uniform">Fit footprint (keep shape)</option>
+        <option value="stretch">Stretch to footprint</option>
+        <option value="keep">Keep original size</option>
+      </select>
+    </label>
     <label>Height (m, 0 = auto) <input type="number" id="modelHeight" value="0" min="0" step="1"></label>
     <button id="btnReplaceModel">Replace selected with model <kbd>R</kbd></button>
     <button id="btnPlaceModel">Place model at crosshair <kbd>P</kbd></button>
 
-<h3>AI styling</h3>
-<button id="btnStyleAI" class="secondary">Style nearby buildings with AI</button>
+    <h3>Match a real building (AI)</h3>
+    <input type="file" id="styleFile" accept="image/*">
+    <button id="btnRestyle">Restyle selected from photo</button>
+    <button id="btnUnstyle" class="secondary">Remove AI look from selected</button>
+    <div class="note" id="styleNote" style="margin-top:6px">Select a building, choose a photo of it (a straight-on shot of one side works best), then restyle. Needs the server running.</div>
+
+    <h3>Layout</h3>
+    <div class="row">
+      <button id="btnExport" class="secondary">Export</button>
+      <button id="btnImport" class="secondary">Import</button>
+      <button id="btnReset" class="secondary">Reset</button>
+    </div>
+    <input type="file" id="importFile" accept=".json" style="display:none">
+
+    <h3>Edit history <span class="badge" id="syncBadge" title="Where the log is stored">this browser</span></h3>
+    <div class="row">
+      <button id="btnReplay" class="secondary">Replay</button>
+      <button id="btnLogExport" class="secondary">Export log</button>
+      <button id="btnLogClear" class="secondary">Clear</button>
+    </div>
+    <div id="logList"></div>
 
     <div class="note" id="counts" style="margin-top:8px"></div>
     <div id="pending"></div>
@@ -133,7 +171,7 @@
     // =====================================================================
     // 1. Read the selection passed in from the picker
     // =====================================================================
-    console.log("explorer.html v5.6 (model thumbnail grid)");
+    console.log("explorer.html v6.1 (AI restyle from photo;edit log + Tiger Data sync;satellite ground, detailed buildings, sturdier map-data loading)");
     const params = new URLSearchParams(window.location.search);
     let centerLat = parseFloat(params.get("lat"));
     let centerLng = parseFloat(params.get("lng"));
@@ -1055,11 +1093,14 @@
     function detailLayout(b) {
       const kind = b.kind || "yes";
       const minH = b.minHeight || 0;
-      const floors = Math.max(1, Math.round((b.height - minH) / 3.1));
+      const look = b.look || null;   // set by "Restyle from photo (AI)"
+      const floors = look && look.storeys
+        ? Math.min(Math.max(look.storeys, 1), Math.max(1, Math.floor((b.height - minH) / 2.4)))
+        : Math.max(1, Math.round((b.height - minH) / 3.1));
       const fh = Math.min(Math.max((b.height - minH) / floors, 2.6), 5);
       const house = HOUSE_TYPES.has(kind) && !APARTMENT_KINDS.has(kind) || kind === "terrace";
       const bay = house ? 3.2 : 3.4;
-      return { kind, minH, floors, fh, house, bay, noWindows: NO_WINDOW_KINDS.has(kind) };
+      return { kind, minH, floors, fh, house, bay, noWindows: NO_WINDOW_KINDS.has(kind) || (!!look && look.windowStyle === "none") };
     }
 
     // rough triangle cost, used to hand out tiers under the budget
@@ -1093,6 +1134,9 @@
         frame: L.house || wallColor.getHSL({ h: 0, s: 0, l: 0 }).l > 0.72 && !b.glass && r(3) < 0.5 ? new THREE.Color(0xf1eee7) : new THREE.Color(0x3c4046),
         trim: tint(wallColor, 1.28)
       };
+      const look = b.look || null;
+      if (look && look.windowTint) palette.glass = new THREE.Color(look.windowTint);
+      if (look && look.frameColor) palette.frame = new THREE.Color(look.frameColor);
       const plinth = L.house ? new THREE.Color(0x8d8983) : tint(wallColor, 0.78);
       const T = D.detail;
 
@@ -1197,6 +1241,26 @@
           for (let k = 1; k < L.floors; k++) fbox(T, f, 0, f.len, 0, 0.07, yBase + k * L.fh - 0.07, yBase + k * L.fh + 0.07);
         }
 
+        if (look && look.windowStyle === "ribbon" && !b.glass) {
+          // continuous horizontal window bands on a solid wall (band height follows the photo's glazing share)
+          if (f.len < 3) return;
+          const band = Math.min(Math.max((look.glazing ?? 0.45) * 1.1, 0.22), 0.72) * L.fh;
+          D.glass.setColor(palette.glass);
+          for (let k = 0; k < L.floors; k++) {
+            if (k === 0 && door && door.edge === ei) continue;   // keep the entrance wall clear
+            const yb = yBase + k * L.fh + (L.fh - band) / 2, yt = yb + band;
+            if (yt > eaveY - 0.2) continue;
+            fq(D.glass, f, 0.5, f.len - 0.5, 0.06, yb, yt);
+            if (tier === 2) {
+              T.setColor(palette.frame);
+              fq(T, f, 0.5, f.len - 0.5, 0.1, yb - 0.06, yb);
+              fq(T, f, 0.5, f.len - 0.5, 0.1, yt, yt + 0.06);
+              const nm = Math.max(1, Math.floor(f.len / 3.2));
+              for (let m = 0; m <= nm; m++) { const s = 0.5 + ((f.len - 1) * m) / nm; fbox(T, f, s - 0.04, s + 0.04, 0.04, 0.12, yb, yt); }
+            }
+          }
+          return;
+        }
         if (b.glass) {
           // curtain wall: one glass ribbon per storey with mullions, dark spandrel = the wall colour underneath
           if (f.len < 3) return;
@@ -1225,8 +1289,10 @@
         const shop = RETAIL_KINDS.has(L.kind);
         for (let k = 0; k < L.floors; k++) {
           const ground = k === 0;
-          const w = shop && ground ? Math.min(step * 0.78, 3.2) : L.house ? Math.min(1.15, step * 0.5) : Math.min(1.6, step * 0.5);
-          const h = shop && ground ? Math.min(2.1, L.fh * 0.7) : L.house ? Math.min(1.3, L.fh * 0.48) : Math.min(1.65, L.fh * 0.52);
+          // window size follows the photo's glazing share when there is one (gk = 1 keeps the old defaults)
+          const gk = look && look.glazing != null ? Math.min(Math.max(Math.sqrt(look.glazing / 0.25), 0.55), 1.75) : 1;
+          const w = shop && ground ? Math.min(step * 0.78, 3.2) : Math.min((L.house ? 1.15 : 1.6) * gk, step * Math.min(0.5 * gk, 0.82));
+          const h = shop && ground ? Math.min(2.1, L.fh * 0.7) : Math.min((L.house ? 1.3 : 1.65) * gk, L.fh * Math.min((L.house ? 0.48 : 0.52) * gk, 0.8));
           const sill = shop && ground ? 0.5 : (L.fh - h) * 0.5;
           const y0 = yBase + k * L.fh + sill;
           if (y0 + h > eaveY - 0.2) continue;
@@ -1334,6 +1400,8 @@
     // ---- editable state (this is what gets saved / undone) ----
     const buildings = new Map();   // id -> building record (see above)
     let removed = new Set();       // OSM building ids that are hidden
+    let restyled = {};             // building id -> AI restyle patch (wallColor, roofColor, glass, roof, look); part of the saved state
+    const originals = new Map();   // building id -> the record as loaded, before any restyle
     let placements = [];           // imported .glb instances: { pid, modelName, x, z, rotY, sx, sy, sz, replaces }
     let selected = null;           // building id ("osm-..." / "custom-...") or placement id ("pl-...")
     let buildingMeshes = [];
@@ -1450,7 +1518,7 @@
         const id = "osm-" + el.id;
         buildings.set(id, {
           id, footprint, height: wallHeight, roof, kind: tags.building || "yes",
-          name: tags.name || null,
+          name: tags.name || tags["name:en"] || null,
           minHeight: num(tags.min_height, 0),
           wallColor: getWallColor(tags, totalHeight).getHex(),
           roofColor: getRoofColor(tags).getHex(),
@@ -1458,6 +1526,7 @@
         });
       }
 
+      applyRestyles();   // saved AI restyles for buildings that only exist now
       rebuildBuildings();
       updateHighlight();
       updateUI();
@@ -1995,52 +2064,6 @@
     const gltfLoader = new GLTFLoader();
     const modelLib = new Map(); // file name -> { root, size, offset }
 
-    let activeModelName = "";
-    const thumbnails = new Map();   // file name -> { renderer, scene, camera, holder }
-
-    function setActiveModel(name) {
-      activeModelName = name;
-      document.querySelectorAll(".model-thumb").forEach((el) => el.classList.toggle("active", el.dataset.name === name));
-    }
-
-    function addThumbnail(name, m) {
-      const cell = document.createElement("div");
-      cell.className = "model-thumb";
-      cell.dataset.name = name;
-      const canvas = document.createElement("canvas");
-      canvas.width = 128; canvas.height = 128;
-      const label = document.createElement("span");
-      label.textContent = name;
-      cell.append(canvas, label);
-      cell.addEventListener("click", () => setActiveModel(name));
-      $("modelGrid").appendChild(cell);
-
-      const tScene = new THREE.Scene();
-      tScene.add(new THREE.HemisphereLight(0xffffff, 0x888888, 1.1));
-      const tLight = new THREE.DirectionalLight(0xffffff, 1.4);
-      tLight.position.set(3, 5, 4);
-      tScene.add(tLight);
-
-      const mesh = m.root.clone(true);
-      mesh.position.copy(m.offset);
-      const holder = new THREE.Group();
-      holder.add(mesh);
-      tScene.add(holder);
-
-      const maxDim = Math.max(m.size.x, m.size.y, m.size.z, 0.01);
-      const dist = maxDim * 1.8;
-      const tCam = new THREE.PerspectiveCamera(35, 1, 0.05, maxDim * 20);
-      tCam.position.set(dist * 0.7, m.size.y * 0.6 + dist * 0.35, dist * 0.7);
-      tCam.lookAt(0, m.size.y * 0.4, 0);
-
-      const tRenderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-      tRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      tRenderer.setSize(128, 128, false);
-      tRenderer.setClearColor(0x000000, 0);
-
-      thumbnails.set(name, { renderer: tRenderer, scene: tScene, camera: tCam, holder });
-    }
-
     async function addModelFile(file) {
       const buf = await file.arrayBuffer();
       const gltf = await gltfLoader.parseAsync(buf, "");
@@ -2061,12 +2084,24 @@
       // offset: puts the model's footprint centre at the origin and its base on y = 0
       modelLib.set(file.name, { root, size, offset: new THREE.Vector3(-c.x, -box.min.y, -c.z) });
 
-      addThumbnail(file.name, modelLib.get(file.name));
-      setActiveModel(file.name);
+      refreshModelSelect(file.name);
       rebuildPlacements();      // placements that were waiting for this file appear now
       updateHighlight();
       updateUI();
       toast(`Loaded ${file.name} (${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)} m)`);
+    }
+
+    function refreshModelSelect(activeName) {
+      const sel = $("modelSelect");
+      const current = activeName || sel.value;
+      sel.innerHTML = "";
+      if (!modelLib.size) sel.innerHTML = '<option value="">(none loaded)</option>';
+      for (const name of modelLib.keys()) {
+        const o = document.createElement("option");
+        o.value = o.textContent = name;
+        sel.appendChild(o);
+      }
+      if (modelLib.has(current)) sel.value = current;
     }
 
     function computeScale(size, info, mode, heightOverride) {
@@ -2121,8 +2156,20 @@
       return {
         removed: [...removed],
         customs: [...buildings.values()].filter((b) => b.id.startsWith("custom-")),
+        restyled: JSON.parse(JSON.stringify(restyled)),
         placements
       };
+    }
+
+    // put every building back to its loaded look, then lay the current AI restyles over it
+    function applyRestyles() {
+      for (const [id, orig] of originals) if (buildings.has(id)) buildings.set(id, orig);
+      for (const [id, patch] of Object.entries(restyled)) {
+        const cur = buildings.get(id);
+        if (!cur) continue;
+        if (!originals.has(id)) originals.set(id, cur);
+        buildings.set(id, { ...originals.get(id), ...patch });
+      }
     }
 
     function applyState(s) {
@@ -2130,6 +2177,8 @@
       for (const id of [...buildings.keys()]) if (id.startsWith("custom-")) buildings.delete(id);
       for (const c of s.customs || []) buildings.set(c.id, { ...c });
       placements = (s.placements || []).map((p) => ({ ...p }));
+      restyled = JSON.parse(JSON.stringify(s.restyled || {}));
+      applyRestyles();
     }
 
     function save() {
@@ -2151,25 +2200,274 @@
       updateUI();
     }
 
-    // Every edit goes through here so it can be undone.
-    function mutate(fn) {
+    // Every edit goes through here so it can be undone and written to the edit log.
+    // meta = { action, targetId, label, at: [x, z] }  (describes the edit for the history panel)
+    function mutate(fn, meta) {
+      if (replaying) return toast("Replay is running - press Stop replay first");
       history.push(JSON.stringify(serialize()));
       if (history.length > 60) history.shift();
       fn();
       afterChange();
+      logEdit(meta || { action: "edit", label: "Edited the scene" });
     }
 
     function undo() {
+      if (replaying) return toast("Replay is running - press Stop replay first");
       const snap = history.pop();
       if (!snap) return toast("Nothing to undo");
       applyState(JSON.parse(snap));
       afterChange();
+      logEdit({ action: "undo", label: "Undid the last edit" });
       toast("Undone");
     }
 
     function removeBuilding(id) {
       if (id.startsWith("custom-")) buildings.delete(id);
       else removed.add(id);
+    }
+
+    // =====================================================================
+    // 6b. Edit log. Every edit is recorded with a snapshot of the scene right after it, so any entry can be
+    //     reverted to or replayed. Stored in this browser; when the Tiger Data server (server.js) is reachable
+    //     each entry is also written to the database's `edits` hypertable and the log is loaded back from there.
+    //     ?api=off turns the server off, ?api=http://host:port points at another one.
+    // =====================================================================
+    const clone = (o) => JSON.parse(JSON.stringify(o));
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const MAX_LOG = 200;
+    const logKey = storageKey + ":log";
+    const SCENE_KEY = storageKey.slice("waypoint:".length);
+    const SESSION_ID = newId("s");
+    let editLog = { base: null, entries: [] };   // base = scene before the first entry; entry.state = scene right after it
+    let replaying = false;
+
+    function loadLog() {
+      try {
+        const raw = localStorage.getItem(logKey);
+        if (raw) { const d = JSON.parse(raw); if (d && d.base && Array.isArray(d.entries)) { editLog = d; return; } }
+      } catch (e) { /* ignore */ }
+      editLog = { base: clone(serialize()), entries: [] };
+    }
+    function saveLog() {
+      try { localStorage.setItem(logKey, JSON.stringify(editLog)); } catch (e) { /* storage may be blocked or full */ }
+    }
+
+    // name + position of whatever an edit touches
+    function describeTarget(id) {
+      if (!id) return { name: "the scene", at: null };
+      if (id.startsWith("pl-")) {
+        const p = placements.find((q) => q.pid === id);
+        return p ? { name: `model ${p.modelName}`, at: [p.x, p.z] } : { name: "a model", at: null };
+      }
+      const b = buildings.get(id);
+      if (!b) return { name: "a building", at: null };
+      const ring = cleanRing(b.footprint);
+      const at = ring.length ? [ring.reduce((s, p) => s + p[0], 0) / ring.length, -ring.reduce((s, p) => s + p[1], 0) / ring.length] : null;
+      let name = b.name;
+      if (!name) {
+        if (id.startsWith("custom-")) name = "custom block";
+        else {
+          const k = b.kind && b.kind !== "yes" ? b.kind.replace(/_/g, " ") : "building";
+          name = `${k} #${id.slice(4)}`;
+        }
+      }
+      return { name, at };
+    }
+
+    function logEdit(meta) {
+      const entry = {
+        id: newId("e"), ts: new Date().toISOString(), action: meta.action || "edit", targetId: meta.targetId || null,
+        label: meta.label || "Edited the scene", at: meta.at || null, state: clone(serialize()), synced: false
+      };
+      editLog.entries.push(entry);
+      while (editLog.entries.length > MAX_LOG) editLog.base = editLog.entries.shift().state;
+      saveLog();
+      renderLog();
+      flushSync();
+    }
+
+    // ---- camera fly-to ----
+    let flying = 0;
+    function flyTo(at, ms = 800) {
+      if (!at) return Promise.resolve();
+      const token = ++flying, [tx, tz] = at, ty = elevationAt(tx, tz);
+      let dx = camera.position.x - tx, dz = camera.position.z - tz, l = Math.hypot(dx, dz);
+      if (l < 1) { dx = 0; dz = 1; l = 1; }
+      const ex = tx + (dx / l) * 55, ez = tz + (dz / l) * 55, ey = Math.max(ty + 30, elevationAt(ex, ez) + 8);
+      const from = camera.position.clone(), to = new THREE.Vector3(ex, ey, ez);
+      const q0 = camera.quaternion.clone();
+      const dummy = new THREE.PerspectiveCamera(); dummy.position.copy(to); dummy.lookAt(tx, ty + 6, tz);
+      const q1 = dummy.quaternion.clone();
+      const t0 = performance.now();
+      return new Promise((resolve) => {
+        const step = () => {
+          if (token !== flying) return resolve();          // a newer fly-to took over
+          const k = Math.min((performance.now() - t0) / ms, 1), e = k * k * (3 - 2 * k);
+          camera.position.lerpVectors(from, to, e);
+          camera.quaternion.slerpQuaternions(q0, q1, e);
+          if (k < 1) requestAnimationFrame(step); else resolve();
+        };
+        step();
+      });
+    }
+
+    // redraw the scene from the current in-memory state (no save, no log entry)
+    function renderScene() {
+      rebuildBuildings();
+      rebuildPlacements();
+      if (!exists(selected)) selected = null;
+      updateHighlight();
+      updateUI();
+    }
+
+    function revertTo(entryId) {
+      const e = entryId === "base" ? { state: editLog.base, label: "the original scene", at: null } : editLog.entries.find((x) => x.id === entryId);
+      if (!e) return;
+      mutate(() => applyState(clone(e.state)), { action: "revert", label: `Reverted to: ${e.label}`, at: e.at });
+    }
+
+    async function replayLog() {
+      if (replaying) { replaying = false; return; }   // second click stops it
+      if (!editLog.entries.length) return toast("No edits to replay yet");
+      replaying = true;
+      $("btnReplay").textContent = "Stop replay";
+      const final = clone(serialize());
+      try {
+        applyState(clone(editLog.base)); selected = null; renderScene();
+        for (const e of [...editLog.entries]) {
+          if (!replaying) break;
+          await sleep(350);
+          if (e.at) await flyTo(e.at, 900);
+          if (!replaying) break;
+          applyState(clone(e.state)); renderScene();
+          toast(e.label);
+          await sleep(1100);
+        }
+      } finally {
+        applyState(final); renderScene(); save();
+        replaying = false;
+        $("btnReplay").textContent = "Replay";
+      }
+    }
+
+    function exportLog() {
+      const data = { version: 1, scene: SCENE_KEY, center: [centerLat, centerLng], radius: radiusMeters, base: editLog.base,
+        entries: editLog.entries.map(({ synced, ...rest }) => rest) };
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: "application/json" }));
+      a.download = "waypoint-edit-log.json";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+    }
+
+    let clearArmed = 0;
+    function clearLog() {
+      if (!clearArmed) {   // first click arms it, second (within 3 s) does it
+        $("btnLogClear").textContent = "Sure?";
+        clearArmed = setTimeout(() => { clearArmed = 0; $("btnLogClear").textContent = "Clear"; }, 3000);
+        return;
+      }
+      clearTimeout(clearArmed); clearArmed = 0; $("btnLogClear").textContent = "Clear";
+      editLog = { base: clone(serialize()), entries: [] };
+      saveLog(); renderLog();
+      if (sync.on) apiCall("/api/log?scene=" + encodeURIComponent(SCENE_KEY), { method: "DELETE" }).catch(() => toast("Couldn't clear the server copy"));
+      toast("Edit log cleared (the scene itself is unchanged)");
+    }
+
+    // ---- history panel ----
+    const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    function renderLog() {
+      const list = $("logList");
+      if (!list) return;
+      list.innerHTML = "";
+      const n = editLog.entries.length;
+      if (!n) { list.innerHTML = '<div class="empty">No edits yet. Delete, replace or place something and it shows up here.</div>'; return; }
+      const row = (cls, dot, label, time, goAt, onRevert, isBase) => {
+        const d = document.createElement("div");
+        d.className = "logRow " + cls;
+        d.innerHTML = `<span class="dot ${dot}"></span><div class="txt"><b></b><div class="t"></div></div>`;
+        d.querySelector("b").textContent = label;
+        d.querySelector(".t").textContent = time;
+        if (goAt) { const g = document.createElement("button"); g.textContent = "Go"; g.title = "Fly the camera here"; g.onclick = () => flyTo(goAt); d.appendChild(g); }
+        if (onRevert) { const r = document.createElement("button"); r.textContent = "Revert"; r.title = "Restore the scene to just after this edit"; r.onclick = onRevert; d.appendChild(r); }
+        list.appendChild(d);
+      };
+      for (let i = n - 1; i >= 0; i--) {
+        const e = editLog.entries[i], kind = e.action.startsWith("replace") ? "replace" : e.action;
+        row(i === n - 1 ? "latest" : "", kind, e.label, fmtTime(e.ts) + (sync.on && !e.synced ? " · syncing…" : ""), e.at, i === n - 1 ? null : () => revertTo(e.id));
+      }
+      row("", "", "Original scene", "before the first logged edit", null, () => revertTo("base"));
+    }
+
+    // ---- Tiger Data sync (through server.js) ----
+    const API = (() => {
+      const p = new URLSearchParams(location.search).get("api");
+      if (p === "off") return null;
+      if (p) return p.replace(/\/$/, "");
+      return location.protocol.startsWith("http") ? "" : "http://localhost:3000";
+    })();
+    const sync = { on: false, busy: false, timer: 0 };
+
+    async function apiCall(path, opts = {}, timeout = 8000) {
+      const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), timeout);
+      try {
+        const r = await fetch(API + path, { ...opts, headers: { "Content-Type": "application/json" }, signal: ctrl.signal });
+        if (!r.ok) {
+          let why = "";
+          try { why = (await r.json()).error || ""; } catch { /* not JSON */ }
+          throw new Error(why || "HTTP " + r.status);
+        }
+        return await r.json();
+      } finally { clearTimeout(t); }
+    }
+    function setBadge(text, cls) {
+      const b = $("syncBadge");
+      if (!b) return;
+      b.textContent = text; b.className = "badge" + (cls ? " " + cls : "");
+    }
+
+    async function flushSync() {
+      if (!sync.on || sync.busy) return;
+      if (!editLog.entries.some((e) => !e.synced)) { setBadge("Tiger Data · synced", "ok"); return; }
+      sync.busy = true; setBadge("Tiger Data · syncing…", "");
+      try {
+        for (;;) {   // keep going until nothing is pending (edits can arrive while a request is in flight)
+          const e = editLog.entries.find((x) => !x.synced);
+          if (!e) break;
+          const { synced, ...entry } = e;
+          await apiCall("/api/edit", { method: "POST", body: JSON.stringify({ scene: SCENE_KEY, center: [centerLat, centerLng], radius: radiusMeters, base: editLog.base, session: SESSION_ID, entry }) });
+          e.synced = true;
+        }
+        saveLog(); renderLog();
+        setBadge("Tiger Data · synced", "ok");
+      } catch (err) {
+        console.warn("Edit log sync failed - will retry.", err);
+        setBadge("offline · retrying", "warn");
+        clearTimeout(sync.timer);
+        sync.timer = setTimeout(flushSync, 10000);
+      } finally { sync.busy = false; }
+    }
+
+    async function initSync() {
+      if (API === null) return;
+      try {
+        const h = await apiCall("/api/health", {}, 2500);
+        if (!h.ok) throw new Error("database not ready");
+      } catch (e) { console.log("Edit log: no Tiger Data server reachable - keeping the log in this browser."); return; }
+      sync.on = true;
+      await flushSync();                       // push anything made while offline
+      if (editLog.entries.some((e) => !e.synced)) return;   // couldn't push; stay local for now
+      try {
+        const d = await apiCall("/api/log?scene=" + encodeURIComponent(SCENE_KEY));
+        if (d.entries && d.entries.length) {   // the database is the source of truth: adopt its log and its latest scene
+          editLog = { base: d.base || editLog.base, entries: d.entries.map((e) => ({ ...e, synced: true })) };
+          applyState(clone(editLog.entries[editLog.entries.length - 1].state));
+          saveLog(); save(); renderScene();
+          toast(`Loaded ${d.entries.length} edit${d.entries.length === 1 ? "" : "s"} from Tiger Data`);
+        }
+        setBadge("Tiger Data · synced", "ok");
+      } catch (e) { console.warn("Could not load the edit log from the server.", e); setBadge("offline · retrying", "warn"); }
+      renderLog();
     }
 
     // ---- selection highlight ----
@@ -2236,55 +2534,155 @@
     // ---- actions ----
     function deleteSelected() {
       if (!selected) return toast("Nothing selected - click a building while looking at it");
+      const d = describeTarget(selected), id = selected;
       mutate(() => {
         if (selected.startsWith("pl-")) placements = placements.filter((p) => p.pid !== selected);
         else removeBuilding(selected);
         selected = null;
-      });
+      }, { action: "delete", targetId: id, label: `Deleted ${d.name}`, at: d.at });
     }
 
     function replaceWithModel() {
-      const m = modelLib.get(activeModelName);
-      if (!m) return toast("Load and select a model first");
+      const name = $("modelSelect").value;
+      const m = modelLib.get(name);
+      if (!m) return toast("Load a .glb file first");
       if (!selected || selected.startsWith("pl-")) return toast("Select a building first");
       const b = buildings.get(selected);
       const info = footprintInfo(b.footprint);
-      const s = computeScale(m.size, info, "uniform", +$("modelHeight").value);
+      const s = computeScale(m.size, info, $("fitMode").value, +$("modelHeight").value);
+      const d = describeTarget(b.id);
       mutate(() => {
         removeBuilding(b.id);
-        const p = { pid: newId("pl"), modelName: activeModelName, x: info.x, z: info.z, rotY: info.rotY, ...s, replaces: b.id };
+        const p = { pid: newId("pl"), modelName: name, x: info.x, z: info.z, rotY: info.rotY, ...s, replaces: b.id };
         placements.push(p);
         selected = p.pid;
-      });
+      }, { action: "replace_model", targetId: b.id, label: `Replaced ${d.name} with ${name}`, at: [info.x, info.z] });
     }
 
     function placeModel() {
-      const m = modelLib.get(activeModelName);
-      if (!m) return toast("Load and select a model first");
+      const m = modelLib.get($("modelSelect").value);
+      if (!m) return toast("Load a .glb file first");
       const pt = groundPoint();
       if (!pt) return toast("Look down at the ground to place a model");
       const s = computeScale(m.size, null, "keep", +$("modelHeight").value);
       mutate(() => {
-        const p = { pid: newId("pl"), modelName: activeModelName, x: pt.x, z: pt.z, rotY: cameraHeading(), ...s, replaces: null };
+        const p = { pid: newId("pl"), modelName: $("modelSelect").value, x: pt.x, z: pt.z, rotY: cameraHeading(), ...s, replaces: null };
         placements.push(p);
         selected = p.pid;
-      });
+      }, { action: "place_model", label: `Placed ${$("modelSelect").value}`, at: [pt.x, pt.z] });
     }
 
     function rotateSelected(dir) {
       if (!selected || !selected.startsWith("pl-")) return toast("Select a placed model to rotate it");
-      mutate(() => { placements.find((p) => p.pid === selected).rotY += dir * Math.PI / 2; });
+      const d = describeTarget(selected), id = selected;
+      mutate(() => { placements.find((p) => p.pid === selected).rotY += dir * Math.PI / 2; },
+        { action: "rotate", targetId: id, label: `Rotated ${d.name}`, at: d.at });
     }
 
     function adjustHeight(dir) {
       if (!selected) return toast("Select a placed model first");
+      const d = describeTarget(selected), id = selected, meta = { action: "resize", targetId: id, label: `${dir > 0 ? "Raised" : "Lowered"} ${d.name}`, at: d.at };
       if (selected.startsWith("pl-")) {
-        mutate(() => { placements.find((p) => p.pid === selected).sy *= dir > 0 ? 1.1 : 1 / 1.1; });
+        mutate(() => { placements.find((p) => p.pid === selected).sy *= dir > 0 ? 1.1 : 1 / 1.1; }, meta);
       } else if (selected.startsWith("custom-")) {   // custom blocks from older saved layouts
-        mutate(() => { const b = buildings.get(selected); b.height = Math.max(3, b.height + dir * 2); });
+        mutate(() => { const b = buildings.get(selected); b.height = Math.max(3, b.height + dir * 2); }, meta);
       } else {
         toast("Select a placed model to change its height");
       }
+    }
+
+    // ---- layout import / export ----
+    function exportLayout() {
+      const data = { version: 1, center: [centerLat, centerLng], radius: radiusMeters, ...serialize() };
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: "application/json" }));
+      a.download = "waypoint-layout.json";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+    }
+
+    async function importLayout(file) {
+      try {
+        const data = JSON.parse(await file.text());
+        mutate(() => applyState(data), { action: "import", label: "Imported a layout file" });
+        toast("Layout imported");
+      } catch (e) {
+        toast("Couldn't read that layout file");
+      }
+    }
+
+    // ---- AI restyle: a photo of the real building -> Gemini (through server.js) -> wall colour, glazing, window style, roof ----
+    const setStyleNote = (msg) => { $("styleNote").textContent = msg || ""; };
+    const HEX6 = /^#[0-9a-f]{6}$/i;
+
+    async function photoToJpegBase64(file, maxSide = 1024) {
+      const bmp = await createImageBitmap(file);
+      const k = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+      c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+      return c.toDataURL("image/jpeg", 0.85).split(",")[1];
+    }
+
+    // turn the AI's description into overrides for a building record (values are validated again here)
+    function patchFromLook(look) {
+      const hexNum = (h) => parseInt(h.slice(1), 16);
+      const styles = ["punched", "ribbon", "curtain", "none"], roofs = ["flat", "gabled", "hipped", "pyramidal", "skillion"];
+      const style = styles.includes(look.windowStyle) ? look.windowStyle : "punched";
+      const glazing = Number.isFinite(look.glazing) ? Math.min(Math.max(look.glazing, 0), 1) : null;
+      const patch = {
+        styledBy: "ai",
+        glass: style === "curtain",
+        look: {
+          material: typeof look.material === "string" ? look.material.slice(0, 20) : "mixed",
+          windowStyle: style, glazing,
+          windowTint: HEX6.test(look.windowTint || "") ? look.windowTint : null,
+          frameColor: HEX6.test(look.frameColor || "") ? look.frameColor : null,
+          storeys: Number.isInteger(look.storeys) && look.storeys >= 1 && look.storeys <= 60 ? look.storeys : null
+        }
+      };
+      if (HEX6.test(look.wallColor || "")) patch.wallColor = hexNum(look.wallColor);
+      if (HEX6.test(look.roofColor || "")) patch.roofColor = hexNum(look.roofColor);
+      if (roofs.includes(look.roofShape) && (look.confidence == null || look.confidence >= 0.5))
+        patch.roof = look.roofShape === "flat" ? null : { shape: look.roofShape };
+      return patch;
+    }
+
+    function applyLook(id, look, source = "a photo") {
+      const d = describeTarget(id), patch = patchFromLook(look);
+      const pct = patch.look.glazing == null ? "" : `, ${Math.round(patch.look.glazing * 100)}% glazing`;
+      mutate(() => { restyled[id] = patch; applyRestyles(); },
+        { action: "restyle", targetId: id, label: `Restyled ${d.name} from ${source} (${patch.look.material}${pct})`, at: d.at });
+    }
+
+    async function restyleSelected() {
+      if (!selected || selected.startsWith("pl-")) return toast("Select a building first");
+      const file = $("styleFile").files[0];
+      if (!file) return toast("Choose a photo of the building first");
+      if (API === null) return toast("AI restyle needs the server (npm start)");
+      const id = selected, b = buildings.get(id), btn = $("btnRestyle");
+      btn.disabled = true; setStyleNote("Asking Gemini to look at the photo…");
+      try {
+        const image = await photoToJpegBase64(file);
+        const res = await apiCall("/api/describe-building", {
+          method: "POST",
+          body: JSON.stringify({ image, mime: "image/jpeg", context: { name: b.name || null, type: b.kind || null, heightMetres: Math.round(b.height) } })
+        }, 60000);
+        if (!res.look) throw new Error("the AI gave no answer");
+        applyLook(id, res.look);
+        const c = res.look.confidence == null ? "" : ` (confidence ${Math.round(res.look.confidence * 100)}%)`;
+        setStyleNote(`${res.look.notes || "Done."}${c}`);
+      } catch (e) {
+        console.warn("Restyle failed", e);
+        const offline = e instanceof TypeError || e.name === "AbortError";
+        setStyleNote(offline ? "Couldn't reach the server. Start it with npm start and open the page through it." : "Restyle failed: " + e.message);
+      } finally { btn.disabled = false; }
+    }
+
+    function unstyleSelected() {
+      if (!selected || !restyled[selected]) return toast("The selected building has no AI look");
+      const id = selected, d = describeTarget(id);
+      mutate(() => { delete restyled[id]; applyRestyles(); }, { action: "restyle", targetId: id, label: `Removed the AI look from ${d.name}`, at: d.at });
     }
 
     // ---- panel text ----
@@ -2316,13 +2714,18 @@
     // ---- panel wiring ----
     $("btnDelete").onclick = deleteSelected;
     $("btnUndo").onclick = undo;
-    $("btnPreviewReal").onclick = () => {
-  if (!selected) return toast("Select a building or model first");
-  previewReal(selected);
-};
     $("btnReplaceModel").onclick = replaceWithModel;
     $("btnPlaceModel").onclick = placeModel;
-    $("btnStyleAI").onclick = () => styleBuildingsWithAI(2, 2);
+    $("btnExport").onclick = exportLayout;
+    $("btnImport").onclick = () => $("importFile").click();
+    $("importFile").addEventListener("change", (e) => { if (e.target.files[0]) importLayout(e.target.files[0]); e.target.value = ""; });
+    $("btnReset").onclick = () => mutate(() => { removed = new Set(); placements = []; applyState({}); selected = null; },
+      { action: "reset", label: "Reset the layout" });
+    $("btnReplay").onclick = replayLog;
+    $("btnLogExport").onclick = exportLog;
+    $("btnLogClear").onclick = clearLog;
+    $("btnRestyle").onclick = restyleSelected;
+    $("btnUnstyle").onclick = unstyleSelected;
     $("modelFile").addEventListener("change", async (e) => {
       for (const f of e.target.files) {
         try { await addModelFile(f); } catch (err) { console.error(err); toast("Couldn't read " + f.name); }
@@ -2338,6 +2741,9 @@
     rebuildBuildings();   // shows saved custom blocks immediately
     rebuildPlacements();
     updateUI();
+    loadLog();
+    renderLog();
+    initSync();           // Tiger Data server (if running): push offline edits, then load the shared log
 
     loadSatellite();
     loadTerrain().catch((err) => console.warn("Terrain failed - staying flat.", err));
@@ -2346,447 +2752,6 @@
       .catch((err) => console.error("Could not load buildings:", err))
       .then(() => loadEnvironment())
       .catch((err) => console.error("Could not load roads/parks/trees:", err));
-    
-        // =====================================================================
-    // 7.5 Real street photos (Mapillary)
-    // =====================================================================
-    function distMeters(lat1, lng1, lat2, lng2) {
-      const R = 6371000;
-      const toRad = (d) => d * Math.PI / 180;
-      const dLat = toRad(lat2 - lat1);
-      const dLng = toRad(lng2 - lng1);
-      const a = Math.sin(dLat / 2) ** 2 +
-                Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-      return 2 * R * Math.asin(Math.sqrt(a));
-    }
-
-    async function searchMapillary(lat, lng, degBox) {
-      const url = `https://graph.mapillary.com/images?access_token=${MAPILLARY_TOKEN}` +
-        `&fields=id,thumb_1024_url,compass_angle,captured_at,geometry` +
-        `&bbox=${lng - degBox},${lat - degBox},${lng + degBox},${lat + degBox}` +
-        `&limit=20`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Mapillary HTTP " + res.status);
-      const json = await res.json();
-      return json.data || [];
-    }
-
-    async function findNearestPhoto(lat, lng) {
-      const attempts = [0.002, 0.006, 0.015];
-      for (const degBox of attempts) {
-        const results = await searchMapillary(lat, lng, degBox);
-        if (!results.length) continue;
-        const withDist = results.map((r) => ({
-          ...r,
-          distance: distMeters(lat, lng, r.geometry.coordinates[1], r.geometry.coordinates[0])
-        })).sort((a, b) => a.distance - b.distance);
-        return withDist[0];
-      }
-      return null;
-    }
-    window.findNearestPhoto = findNearestPhoto;
-        // =====================================================================
-    // 7.6 Isolated cutout render (for compositing onto a real photo)
-    // =====================================================================
-    // headingDeg: compass direction the "camera" faces, matching a photo's compass_angle (0 = north)
-    async function renderCutout(id, headingDeg) {
-      const snapScene = new THREE.Scene();   // no background = transparent
-      snapScene.add(new THREE.HemisphereLight(0xbfdcff, 0x8a8f7a, 0.9));
-      const sun2 = new THREE.DirectionalLight(0xfff2dd, 2.2);
-      sun2.position.set(120, 200, 80);
-      snapScene.add(sun2);
-
-      let centerX = 0, centerZ = 0, objHeight = 10, objRadius = 15;
-
-      if (id.startsWith("pl-")) {
-        const p = placements.find((q) => q.pid === id);
-        const m = p && modelLib.get(p.modelName);
-        if (!p || !m) return null;
-        const holder = makeHolder(p);
-        snapScene.add(holder);
-        centerX = p.x; centerZ = p.z;
-        objHeight = m.size.y * p.sy;
-        objRadius = Math.max(m.size.x * p.sx, m.size.z * p.sz) / 2;
-      } else {
-        const b = buildings.get(id);
-        if (!b) return null;
-        const parts = buildingParts(b);
-        if (!parts) return null;
-        for (const g of parts.walls) snapScene.add(new THREE.Mesh(g, parts.glass ? glassMat : wallMat));
-        for (const g of parts.roofs) snapScene.add(new THREE.Mesh(g, roofMat));
-        const info = footprintInfo(b.footprint);
-        centerX = info.x; centerZ = info.z;
-        objHeight = b.height + (b.roof ? (b.roof.h || 4) : 0);
-        objRadius = Math.max(info.length, info.width) / 2;
-      }
-
-      // Camera placed out along the heading direction, looking back at the building
-      const camDist = objRadius * 2.5 + 15;
-      const rad = (headingDeg * Math.PI) / 180;
-      const camX = centerX - Math.sin(rad) * camDist;
-      const camZ = centerZ + Math.cos(rad) * camDist;
-      const camY = objHeight * 0.55 + 1.6;
-
-      const snapCam = new THREE.PerspectiveCamera(60, 1, 0.1, 2000);
-      snapCam.position.set(camX, camY, camZ);
-      snapCam.lookAt(centerX, objHeight * 0.4, centerZ);
-
-      const SIZE = 1024;
-      const snapRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
-      snapRenderer.setSize(SIZE, SIZE);
-      snapRenderer.setClearColor(0x000000, 0);   // fully transparent background
-      snapRenderer.render(snapScene, snapCam);
-
-      const dataUrl = snapRenderer.domElement.toDataURL("image/png");
-
-      snapScene.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
-      snapRenderer.dispose();
-
-      return dataUrl;
-    }
-    window.renderCutout = renderCutout;
-
-    // =====================================================================
-    // 7.65 Real camera geometry: where the target actually sits in the photo's frame
-    // =====================================================================
-    const CAMERA_FOV_DEG = 80;   // typical horizontal FOV for phone/action-cam street imagery (Mapillary doesn't reliably report this)
-
-    function bearingDeg(lat1, lng1, lat2, lng2) {
-      const toRad = (d) => d * Math.PI / 180, toDeg = (r) => r * 180 / Math.PI;
-      const y = Math.sin(toRad(lng2 - lng1)) * Math.cos(toRad(lat2));
-      const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lng2 - lng1));
-      return (toDeg(Math.atan2(y, x)) + 360) % 360;
-    }
-    function angleDiff(a, b) {   // shortest signed difference a - b, in [-180, 180]
-      return ((a - b + 540) % 360) - 180;
-    }
-
-    // Where the target building actually falls in this photo's frame, based on real position/heading.
-    function computeFraming(photo, targetLat, targetLng, targetRadius) {
-      const [camLng, camLat] = photo.geometry.coordinates;
-      const distance = distMeters(camLat, camLng, targetLat, targetLng);
-      const bearingToTarget = bearingDeg(camLat, camLng, targetLat, targetLng);
-      const offsetDeg = angleDiff(bearingToTarget, photo.compass_angle);
-      const halfFov = CAMERA_FOV_DEG / 2;
-
-      const visible = Math.abs(offsetDeg) <= halfFov;
-      // perspective-correct horizontal position (not linear - a pinhole-camera tan mapping)
-      const xFrac = 0.5 + 0.5 * (Math.tan((offsetDeg * Math.PI) / 180) / Math.tan((halfFov * Math.PI) / 180));
-      // apparent size from real angular size at this distance
-      const angularWidthDeg = (2 * Math.atan(targetRadius / Math.max(distance, 1)) * 180) / Math.PI;
-      const widthFrac = angularWidthDeg / CAMERA_FOV_DEG;
-
-        return { distance, offsetDeg, visible, xFrac, widthFrac, camLat, camLng };
-    }
-
-    async function findFramedPhoto(lat, lng, targetRadius) {
-      const attempts = [0.002, 0.006, 0.015, 0.03];
-      for (const degBox of attempts) {
-        const results = await searchMapillary(lat, lng, degBox);
-        if (!results.length) continue;
-        const scored = results.map((r) => ({ photo: r, framing: computeFraming(r, lat, lng, targetRadius) }));
-        const framed = scored.filter((s) => s.framing.visible);
-        const pool = framed.length ? framed : scored;
-        pool.sort((a, b) => {
-          const diff = Math.abs(a.framing.offsetDeg) - Math.abs(b.framing.offsetDeg);
-          return Math.abs(diff) > 5 ? diff : a.framing.distance - b.framing.distance;
-        });
-        return { ...pool[0].photo, framing: pool[0].framing, wasFramed: framed.length > 0 };
-      }
-      return null;
-    }
-    window.findFramedPhoto = findFramedPhoto;
-
-    // Picks up to `maxPhotos` photos of the building, spread across different sides where possible.
-    async function findMultiSidePhotos(lat, lng, targetRadius, maxPhotos = 3) {
-      const attempts = [0.006, 0.015, 0.03];
-      let candidates = [];
-      for (const degBox of attempts) {
-        const results = await searchMapillary(lat, lng, degBox);
-        candidates = results.map((r) => ({ photo: r, framing: computeFraming(r, lat, lng, targetRadius) }));
-        if (candidates.filter((c) => c.framing.visible).length >= maxPhotos) break;
-      }
-      if (!candidates.length) return [];
-
-      let pool = candidates.filter((c) => c.framing.visible);
-      if (!pool.length) pool = candidates;
-
-      pool.forEach((c) => {
-        c.viewingAngle = bearingDeg(lat, lng, c.framing.camLat, c.framing.camLng);
-      });
-      pool.sort((a, b) => Math.abs(a.framing.offsetDeg) - Math.abs(b.framing.offsetDeg));
-
-      const chosen = [];
-      for (const c of pool) {
-        if (chosen.length >= maxPhotos) break;
-        const tooClose = chosen.some((p) => Math.abs(angleDiff(c.viewingAngle, p.viewingAngle)) < 55);
-        if (!tooClose) chosen.push(c);
-      }
-      if (chosen.length < maxPhotos) {
-        for (const c of pool) {
-          if (chosen.length >= maxPhotos) break;
-          if (!chosen.includes(c)) chosen.push(c);
-        }
-      }
-      return chosen;
-    }
-    window.findMultiSidePhotos = findMultiSidePhotos;
-
-        // =====================================================================
-    // 7.7 "See it for real" preview: real photo + rendered cutout, layered with CSS
-    // =====================================================================
-    function worldToLatLng(x, z) {
-      // inverse of latLngToLocal/toWorld
-      const north = -z;
-      return [centerLat + north / M_PER_DEG_LAT, centerLng + x / M_PER_DEG_LNG];
-    }
-
-    function targetWorldCenter(id) {
-  if (id.startsWith("pl-")) {
-    const p = placements.find((q) => q.pid === id);
-    if (!p) return null;
-    const m = modelLib.get(p.modelName);
-    const radius = m ? Math.max(m.size.x * p.sx, m.size.z * p.sz) / 2 : 10;
-    return { x: p.x, z: p.z, radius };
-  }
-  const b = buildings.get(id);
-  if (!b) return null;
-  const info = footprintInfo(b.footprint);
-  return { x: info.x, z: info.z, radius: Math.max(info.length, info.width) / 2 };
-}
-
-    function closePreview() {
-      const el = document.getElementById("realPreview");
-      if (el) el.remove();
-    }
-
-    async function previewReal(id) {
-  const center = targetWorldCenter(id);
-  if (!center) return toast("Select a building or model first");
-  const [lat, lng] = worldToLatLng(center.x, center.z);
-  const isNewBuilding = id.startsWith("pl-") || id.startsWith("custom-");
-
-  toast("Finding a nearby real photo...");
-  const photo = await findNearestPhoto(lat, lng);
-  if (!photo) { toast("No street photo found near this building"); return; }
-
-  closePreview();
-  const wrap = document.createElement("div");
-  wrap.id = "realPreview";
-  wrap.style.cssText = `
-    position:fixed; inset:0; z-index:9999; background:rgba(10,14,18,0.92);
-    display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px;`;
-
-  const stage = document.createElement("div");
-  stage.style.cssText = "position:relative; width:min(90vw,900px); aspect-ratio:1; overflow:hidden; border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,0.5);";
-
-  const photoImg = document.createElement("img");
-  photoImg.src = photo.thumb_1024_url;
-  photoImg.style.cssText = "position:absolute; inset:0; width:100%; height:100%; object-fit:cover;";
-  stage.append(photoImg);
-
-  const controlsBox = document.createElement("div");
-  controlsBox.style.cssText = "display:flex; gap:14px; align-items:center; color:#fff; font:13px sans-serif; background:rgba(255,255,255,0.08); padding:10px 16px; border-radius:10px;";
-
-  const info = document.createElement("div");
-  info.style.cssText = "color:#cbd5df; font:12px sans-serif; text-align:center;";
-
-  if (isNewBuilding) {
-    // Only render + composite for something that doesn't exist in reality yet
-    const wasSelected = selected;
-    selected = null;
-    updateHighlight();
-
-    toast("Rendering...");
-    const cutoutUrl = await renderCutout(id, photo.compass_angle);
-    selected = wasSelected;
-    updateHighlight();
-
-    if (cutoutUrl) {
-      const framing = computeFraming(photo, lat, lng, center.radius);
-      const initWidthPct = Math.min(Math.max(framing.widthFrac * 100, 6), 90);
-      const initLeftPct = Math.min(Math.max(framing.xFrac * 100, 0), 100);
-      const initTopPct = 55;
-
-      const cutoutImg = document.createElement("img");
-      cutoutImg.src = cutoutUrl;
-      cutoutImg.style.cssText = `position:absolute; left:${initLeftPct}%; top:${initTopPct}%; width:${initWidthPct}%; transform:translate(-50%,-50%); pointer-events:none;`;
-      stage.append(cutoutImg);
-
-      info.textContent = `New building — ${Math.round(framing.distance)} m from camera` +
-        (framing.visible ? "" : " — outside this photo's view, position is approximate");
-
-      function slider(label, min, max, val, step, onInput) {
-        const box = document.createElement("label");
-        box.style.cssText = "display:flex; flex-direction:column; gap:4px;";
-        box.textContent = label;
-        const inp = document.createElement("input");
-        Object.assign(inp, { type: "range", min, max, value: val, step });
-        inp.addEventListener("input", () => onInput(+inp.value));
-        box.appendChild(inp);
-        return box;
-      }
-      controlsBox.append(
-        slider("Size", 5, 90, initWidthPct, 1, (v) => cutoutImg.style.width = v + "%"),
-        slider("Left/Right", 0, 100, initLeftPct, 1, (v) => cutoutImg.style.left = v + "%"),
-        slider("Up/Down", 0, 100, initTopPct, 1, (v) => cutoutImg.style.top = v + "%")
-      );
-    } else {
-      info.textContent = "Couldn't render the new building, showing the real photo only.";
-    }
-  } else {
-    // Existing real OSM building: just the real photo, nothing to composite
-    info.textContent = "Real street photo of this building";
-  }
-
-  const closeBtn = document.createElement("button");
-  closeBtn.textContent = "Close";
-  closeBtn.style.cssText = "padding:8px 16px; border:0; border-radius:8px; background:#1d8fe1; color:#fff; font-weight:600; cursor:pointer;";
-  closeBtn.onclick = closePreview;
-
-    wrap.append(stage, info, controlsBox, closeBtn);
-  document.body.appendChild(wrap);
-}
-window.previewReal = previewReal;
-
-    // =====================================================================
-    // 7.8 AI-styled buildings: vision model reads real photos per building and
-    //     overrides wall/roof colour and material, instead of guessing from OSM tags.
-    //     Low-confidence or missing photos leave the building exactly as it was
-    //     (no regression) - this is the "messy real-world data" fallback path.
-    // =====================================================================
-    async function withRetry(fn, tries = 4) {
-  for (let i = 0; i < tries; i++) {
-    try {
-      return await fn();
-    } catch (err) {
-      const rateLimited = /HTTP 429|HTTP 500|HTTP 503/.test(err.message);
-      if (!rateLimited || i === tries - 1) throw err;
-      const wait = 1000 * Math.pow(2, i) + Math.random() * 500;
-      await new Promise((r) => setTimeout(r, wait));
-    }
-  }
-}
-            async function analyzeBuildingStyle(photoUrls) {
-      const prompt = `You are looking at ${photoUrls.length} street photo(s) of the same building, taken from different angles/sides. ` +
-        'Synthesize an overall exterior style for the WHOLE building, not just what one photo shows. ' +
-        'Return ONLY compact JSON, no markdown, no explanation: ' +
-        '{"wallColor":"#rrggbb","roofColor":"#rrggbb","material":"brick|concrete|glass|stone|wood|stucco|other","glass":true|false,"confidence":0.0}. ' +
-        'If the images are unclear or do not show a building facade, set confidence to 0.';
-
-      const res = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${OPENAI_API_KEY}` },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          messages: [{ role: "user", content: [
-            { type: "text", text: prompt },
-            ...photoUrls.map((url) => ({ type: "image_url", image_url: { url } }))
-          ]}],
-          max_tokens: 200,
-          temperature: 0
-        })
-      });
-      if (!res.ok) throw new Error("OpenAI HTTP " + res.status);
-      const json = await res.json();
-      const text = json.choices?.[0]?.message?.content || "";
-      const match = text.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error("No JSON in vision response");
-      return JSON.parse(match[0]);
-    }
-
-    async function analyzeBuildingByName(name) {
-      const prompt = `You are asked about the real building named "${name}". ` +
-        'Only answer if you have specific, reliable knowledge of this exact building\'s real exterior appearance ' +
-        '(e.g. it is a well-known landmark, university building, or notable structure you genuinely know). ' +
-        'Do NOT guess or invent details for buildings you are not confident about. ' +
-        'Return ONLY compact JSON: {"wallColor":"#rrggbb","roofColor":"#rrggbb","material":"brick|concrete|glass|stone|wood|stucco|other","glass":true|false,"confidence":0.0}. ' +
-        'If you are not genuinely certain, set confidence to 0.';
-
-      const res = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${OPENAI_API_KEY}` },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: 150,
-          temperature: 0
-        })
-      });
-      if (!res.ok) throw new Error("OpenAI HTTP " + res.status);
-      const json = await res.json();
-      const text = json.choices?.[0]?.message?.content || "";
-      const match = text.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error("No JSON in response");
-      return JSON.parse(match[0]);
-    }
-
-    async function styleBuildingsWithAI(maxBuildings = 40, concurrency = 4) {
-      if (typeof OPENAI_API_KEY === "undefined" || !OPENAI_API_KEY) {
-        toast("No OPENAI_API_KEY in config.js - add it to use AI styling");
-        return;
-      }
-      const items = [...buildings.values()]
-        .filter((b) => b.id.startsWith("osm-"))
-        .map((b) => {
-          const info = footprintInfo(b.footprint);
-          return { b, info, dist: Math.hypot(info.x, info.z) };
-        })
-        .sort((p, q) => p.dist - q.dist)
-        .slice(0, maxBuildings);
-
-      if (!items.length) return toast("No buildings loaded yet");
-      toast(`Styling ${items.length} nearby buildings with AI...`);
-
-      let done = 0, styled = 0, noPhoto = 0, lowConf = 0, failed = 0;
-      const queue = items.slice();
-
-            async function worker() {
-        while (queue.length) {
-          const it = queue.pop();
-          try {
-            const [lat, lng] = worldToLatLng(it.info.x, it.info.z);
-            const radius = Math.max(it.info.length, it.info.width) / 2;
-           const photos = await withRetry(() => findMultiSidePhotos(lat, lng, radius, 3));
-            let style = null, source = "photo";
-if (photos.length) {
-  style = await withRetry(() => analyzeBuildingStyle(photos.map((p) => p.photo.thumb_1024_url)));
-} else if (it.b.name) {
-  style = await withRetry(() => analyzeBuildingByName(it.b.name));
-  source = "name-knowledge";
-}
-
-if (!style) { noPhoto++; }
-else if (style.confidence >= 0.5) {
-  if (style.wallColor) it.b.wallColor = parseInt(style.wallColor.replace("#", ""), 16);
-  if (style.roofColor) it.b.roofColor = parseInt(style.roofColor.replace("#", ""), 16);
-  if (typeof style.glass === "boolean") it.b.glass = style.glass;
-  it.b.aiStyled = true;
-  it.b.aiSource = source;
-  styled++;
-} else lowConf++;
-          } catch (err) {
-            console.warn("AI styling failed for", it.b.id, err);
-            failed++;
-          }
-          done++;
-          if (done % 4 === 0 || done === items.length) {
-            toast(`Styling: ${done}/${items.length} - ${styled} updated, ${noPhoto} no photo, ${lowConf} unsure, ${failed} failed`);
-          }
-        }
-      }
-
-      await Promise.all(Array.from({ length: concurrency }, worker));
-      rebuildBuildings();
-      updateHighlight();
-      updateUI();
-      toast(`Done: ${styled}/${items.length} buildings AI-styled (${noPhoto} had no clear photo)`);
-    }
-    window.styleBuildingsWithAI = styleBuildingsWithAI;
-    window.analyzeBuildingStyle = analyzeBuildingStyle;
-    window.findMultiSidePhotos = findMultiSidePhotos;
-
-
 
     // =====================================================================
     // 8. Flycam controls (Minecraft-creative style) + edit shortcuts
@@ -2829,7 +2794,6 @@ else if (style.confidence >= 0.5) {
       switch (e.code) {
         case "KeyX": case "Delete": deleteSelected(); break;
         case "KeyR": replaceWithModel(); break;
-        case "KeyV": if (selected) previewReal(selected); break;
         case "KeyP": placeModel(); break;
         case "KeyQ": rotateSelected(-1); break;
         case "KeyE": rotateSelected(1); break;
@@ -2878,11 +2842,6 @@ else if (style.confidence >= 0.5) {
 
       sky.position.copy(camera.position);
       renderer.render(scene, camera);
-
-      thumbnails.forEach((t) => {
-        t.holder.rotation.y += delta * 0.6;
-        t.renderer.render(t.scene, t.camera);
-      });
     }
     animate();
 
@@ -2895,12 +2854,14 @@ else if (style.confidence >= 0.5) {
     // Handy for debugging from the console
     window.__scene = { scene, camera, renderer };
     window.__wp = {
-      buildings, pick, addModelFile, undo, elevationAt, terrain, terrainMesh,
+      buildings, pick, addModelFile, undo, elevationAt, terrain, terrainMesh, revertTo, replayLog, flyTo,
+      log: () => editLog, syncState: sync,
       meshes: () => buildingMeshes,
       env: envGroup,
-      state: () => ({ selected, removed: [...removed], placements }),
+      state: () => ({ selected, removed: [...removed], placements, restyled: JSON.parse(JSON.stringify(restyled)) }),
       select: (id) => { selected = id; updateHighlight(); updateUI(); },
-      actions: { deleteSelected, replaceWithModel, placeModel, rotateSelected, adjustHeight }
+      applyLook, restyled: () => restyled,
+      actions: { deleteSelected, replaceWithModel, placeModel, rotateSelected, adjustHeight, restyleSelected, unstyleSelected }
     };
   </script>
 </body>
