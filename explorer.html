@@ -2824,6 +2824,45 @@
         toast("Select a placed model to change its height");
       }
     }
+        function worldToLatLng(x, z) {
+      const north = -z;
+      return [centerLat + north / M_PER_DEG_LAT, centerLng + x / M_PER_DEG_LNG];
+    }
+    function distMeters(lat1, lng1, lat2, lng2) {
+      const R = 6371000, toRad = (d) => d * Math.PI / 180;
+      const a = Math.sin(toRad(lat2 - lat1) / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(toRad(lng2 - lng1) / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(a));
+    }
+    function bearingDeg(lat1, lng1, lat2, lng2) {
+      const toRad = (d) => d * Math.PI / 180, toDeg = (r) => r * 180 / Math.PI;
+      const y = Math.sin(toRad(lng2 - lng1)) * Math.cos(toRad(lat2));
+      const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lng2 - lng1));
+      return (toDeg(Math.atan2(y, x)) + 360) % 360;
+    }
+    async function searchMapillary(lat, lng, degBox) {
+      if (typeof MAPILLARY_TOKEN === "undefined" || !MAPILLARY_TOKEN) return [];
+      const url = `https://graph.mapillary.com/images?access_token=${MAPILLARY_TOKEN}` +
+        `&fields=id,thumb_1024_url,compass_angle,geometry&bbox=${lng - degBox},${lat - degBox},${lng + degBox},${lat + degBox}&limit=20`;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return [];
+        return (await res.json()).data || [];
+      } catch { return []; }
+    }
+    async function findFewPhotos(lat, lng, max = 2) {
+      const results = await searchMapillary(lat, lng, 0.0015);
+      if (!results.length) return [];
+      const withDist = results.map((r) => ({
+        ...r, dist: distMeters(lat, lng, r.geometry.coordinates[1], r.geometry.coordinates[0]),
+        bearing: bearingDeg(lat, lng, r.geometry.coordinates[1], r.geometry.coordinates[0])
+      })).sort((a, b) => a.dist - b.dist);
+      const chosen = [withDist[0]];
+      for (const c of withDist.slice(1)) {
+        if (chosen.length >= max) break;
+        if (!chosen.some((p) => Math.abs(((c.bearing - p.bearing + 540) % 360) - 180) < 55)) chosen.push(c);
+      }
+      return chosen.map((c) => c.thumb_1024_url);
+    }
 
     // ---- AI restyle: the closest buildings' names + map data -> OpenAI (through server.js) -> wall colour, glazing, window style, roof ----
     const setStyleNote = (msg) => { $("styleNote").textContent = msg || ""; };
@@ -2885,12 +2924,17 @@
       const near = nearestToRestyle();
       if (!near.length) { setStyleNote("No more buildings nearby to restyle. Walk somewhere else and press again."); return toast("Nothing left to restyle here"); }
       const btn = $("btnRestyle");
-      btn.disabled = true; setStyleNote(`Asking OpenAI about the ${near.length} closest buildings…`);
+      btn.disabled = true; setStyleNote(`Asking Gemini about the ${near.length} closest buildings…`);
       try {
-        const opts = {
-          method: "POST",
-          body: JSON.stringify({ buildings: near.map(({ id, b, area }) => ({ id, name: b.name || null, type: b.kind || null, heightMetres: Math.round(b.height), areaM2: Math.round(area), tags: b.osm || {} })) })
-        };
+                setStyleNote(`Looking for street photos of the ${near.length} closest buildings…`);
+        const withPhotos = await Promise.all(near.map(async ({ id, b, area }) => {
+          const info = footprintInfo(b.footprint);
+          const [lat, lng] = worldToLatLng(info.x, info.z);
+          const photos = await findFewPhotos(lat, lng, 2).catch(() => []);
+          return { id, name: b.name || null, type: b.kind || null, heightMetres: Math.round(b.height), areaM2: Math.round(area), tags: b.osm || {}, photos };
+        }));
+                setStyleNote(`Asking Gemini about the ${near.length} closest buildings (${withPhotos.filter((x) => x.photos.length).length} with real photos)…`);
+        const opts = { method: "POST", body: JSON.stringify({ buildings: withPhotos }) };
         let res;
         try { res = await apiCall("/api/restyle-nearby", opts, 90000); }
         catch (err) {

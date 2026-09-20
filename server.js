@@ -208,9 +208,7 @@ app.get("/api/recent", wrap(async (req, res) => {
   res.json(rows.map((r) => ({ ts: r.ts.toISOString(), scene: r.scene_key, action: r.action, label: r.label, session: r.session_id })));
 }));
 
-// ---------- AI: restyle the buildings near the player (Gemini) ----------
-// explorer.html sends the closest few buildings (name, size, a few OpenStreetMap tags); one Gemini call returns a small JSON
-// "look" for each (materials, colours, glazing...) which the explorer applies. The API key stays here on the server.
+// ---------- AI: restyle the buildings near the player (Gemini, photo-aware with a text-only fallback) ----------
 const GEMINI_MODELS = process.env.GEMINI_MODEL ? [process.env.GEMINI_MODEL] : ["gemini-3.6-flash", "gemini-2.5-flash"];
 const MAX_BUILDINGS = 12;
 
@@ -234,6 +232,13 @@ otherwise infer the typical look from its type, size and tags (a plain guess is 
 Buildings:
 ${list.map((b) => JSON.stringify(b)).join("\n")}
 Return ONLY a JSON object of the form {"buildings": {"<id>": LOOK, ...}} with one LOOK for every id above, where LOOK is exactly:
+${LOOK_KEYS}
+No markdown, no commentary, JSON only.`;
+
+const PHOTO_PROMPT = (b, n) => `You are looking at ${n} real street photo(s) of the same building near the University of Waterloo / Kitchener-Waterloo (Ontario, Canada).
+Known info: ${JSON.stringify({ name: b.name, type: b.type, heightMetres: b.heightMetres, tags: b.tags })}
+Describe the building's EXTERIOR based mainly on what the photo(s) actually show, using the known info only as extra context.
+Return ONLY compact JSON, exactly this shape:
 ${LOOK_KEYS}
 No markdown, no commentary, JSON only.`;
 
@@ -267,38 +272,22 @@ function parseJsonLoose(text) {
   return null;
 }
 
-const shortStr = (v, n) => (typeof v === "string" ? v.slice(0, n) : undefined);
-
-app.post("/api/restyle-nearby", wrap(async (req, res) => {
+// One shared call path (with model + brief retry fallback) for both the text batch and per-building vision calls.
+async function callGemini(parts) {
   const key = process.env.GEMINI_API_KEY;
-  if (!key) return res.status(503).json({ error: "GEMINI_API_KEY is not set in .env (create one at https://aistudio.google.com/apikey), then restart the server." });
-  const input = Array.isArray(req.body?.buildings) ? req.body.buildings.slice(0, MAX_BUILDINGS) : [];
-  const list = [];
-  for (const b of input) {
-    if (!isObj(b) || typeof b.id !== "string" || !/^[\w-]{1,40}$/.test(b.id)) continue;
-    const tags = {};
-    if (isObj(b.tags)) for (const [k, v] of Object.entries(b.tags).slice(0, 14)) if (/^[a-z:_]{1,30}$/.test(k) && typeof v === "string" && v.length <= 60) tags[k] = v;
-    list.push({ id: b.id, name: shortStr(b.name, 80) || null, type: shortStr(b.type, 40) || null,
-      heightMetres: Number.isFinite(b.heightMetres) ? Math.round(b.heightMetres) : null,
-      footprintM2: Number.isFinite(b.areaM2) ? Math.round(b.areaM2) : null, tags });
-  }
-  if (!list.length) return res.status(400).json({ error: "buildings (a non-empty list) is required" });
-  const prompt = LOOK_PROMPT(list);
-
-    let lastErr = "no model tried";
-  const attempts = GEMINI_MODELS.flatMap((m) => [m, m]);   // try each model, then give it one retry before moving on
-  for (const model of attempts) {
+  if (!key) throw new Error("GEMINI_API_KEY is not set in .env (create one at https://aistudio.google.com/apikey), then restart the server.");
+  let lastErr = "no model tried";
+  const attempts = GEMINI_MODELS.flatMap((m) => [m, m]);
+  for (let i = 0; i < attempts.length; i++) {
+    const model = attempts[i];
+    if (i > 0 && attempts[i] === attempts[i - 1]) await new Promise((r) => setTimeout(r, 1200));
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 60000);
     try {
-      if (attempts.indexOf(model) !== attempts.lastIndexOf(model)) await new Promise((r) => setTimeout(r, 1200));   // brief pause before a same-model retry
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.4, responseMimeType: "application/json" }
-        }),
+        body: JSON.stringify({ contents: [{ parts }], generationConfig: { temperature: 0.4, responseMimeType: "application/json" } }),
         signal: ctl.signal
       });
       const data = await r.json().catch(() => ({}));
@@ -307,25 +296,77 @@ app.post("/api/restyle-nearby", wrap(async (req, res) => {
         lastErr = `Gemini error ${r.status}: ${msg}`;
         if (r.status === 401 || r.status === 403) lastErr = "Gemini rejected the API key. Check GEMINI_API_KEY in .env.";
         if (r.status === 429) lastErr = "Gemini rate limit or quota hit (429). Wait a bit, or enable billing at aistudio.google.com.";
-        if (r.status === 404 || r.status === 429 || r.status === 503) continue;   // model not available, rate-limited, or briefly overloaded: try the next one (or retry the same one below)
-        return res.status(502).json({ error: lastErr });
+        if (r.status === 404 || r.status === 429 || r.status === 503) continue;
+        throw new Error(lastErr);
       }
       const candidate = data?.candidates?.[0];
       const text = candidate?.content?.parts?.[0]?.text || "";
       const parsed = parseJsonLoose(text);
-      const map = isObj(parsed?.buildings) ? parsed.buildings : isObj(parsed) ? parsed : {};
-      const looks = {};
-      for (const b of list) { const l = cleanLook(map[b.id]); if (l) looks[b.id] = l; }
-      if (!Object.keys(looks).length) {
-        const why = candidate?.finishReason && candidate.finishReason !== "STOP" ? candidate.finishReason : "unreadable answer";
-        return res.status(502).json({ error: `Gemini did not return usable descriptions (${why}). Try again.` });
-      }
-      return res.json({ looks, model });
+      if (!parsed) { lastErr = "unreadable answer"; continue; }
+      return { parsed, model };
     } catch (e) {
-      lastErr = e.name === "AbortError" ? "Gemini timed out" : "Could not reach Gemini: " + e.message;
+      if (e.name === "AbortError") lastErr = "Gemini timed out";
+      else if (!lastErr.startsWith("Gemini")) lastErr = "Could not reach Gemini: " + e.message;
     } finally { clearTimeout(timer); }
   }
-  res.status(502).json({ error: lastErr });
+  throw new Error(lastErr);
+}
+
+async function urlToInlineImage(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("photo fetch HTTP " + res.status);
+  const buf = Buffer.from(await res.arrayBuffer());
+  const mimeType = res.headers.get("content-type") || "image/jpeg";
+  return { inline_data: { mime_type: mimeType, data: buf.toString("base64") } };
+}
+
+async function analyzePhotoLook(b) {
+  const images = await Promise.all(b.photos.map(urlToInlineImage));
+  const { parsed } = await callGemini([{ text: PHOTO_PROMPT(b, images.length) }, ...images]);
+  return cleanLook(parsed);
+}
+
+const shortStr = (v, n) => (typeof v === "string" ? v.slice(0, n) : undefined);
+
+app.post("/api/restyle-nearby", wrap(async (req, res) => {
+  const input = Array.isArray(req.body?.buildings) ? req.body.buildings.slice(0, MAX_BUILDINGS) : [];
+  const list = [];
+  for (const b of input) {
+    if (!isObj(b) || typeof b.id !== "string" || !/^[\w-]{1,40}$/.test(b.id)) continue;
+    const tags = {};
+    if (isObj(b.tags)) for (const [k, v] of Object.entries(b.tags).slice(0, 14)) if (/^[a-z:_]{1,30}$/.test(k) && typeof v === "string" && v.length <= 60) tags[k] = v;
+    const photos = Array.isArray(b.photos) ? b.photos.filter((u) => typeof u === "string" && /^https?:\/\//.test(u)).slice(0, 3) : [];
+    list.push({ id: b.id, name: shortStr(b.name, 80) || null, type: shortStr(b.type, 40) || null,
+      heightMetres: Number.isFinite(b.heightMetres) ? Math.round(b.heightMetres) : null,
+      footprintM2: Number.isFinite(b.areaM2) ? Math.round(b.areaM2) : null, tags, photos });
+  }
+  if (!list.length) return res.status(400).json({ error: "buildings (a non-empty list) is required" });
+
+  const withPhotos = list.filter((b) => b.photos.length);
+  const withoutPhotos = list.filter((b) => !b.photos.length);
+  const looks = {};
+  let usedModel = null;
+
+  try {
+    for (const b of withPhotos) {   // sequential: keeps quota usage predictable, and these are already capped by MAX_BUILDINGS
+      try {
+        const look = await analyzePhotoLook(b);
+        if (look) looks[b.id] = look;
+      } catch (e) { console.warn("Photo-based look failed for", b.id, e.message); }
+    }
+    if (withoutPhotos.length) {
+      const { parsed, model } = await callGemini([{ text: LOOK_PROMPT(withoutPhotos) }]);
+      usedModel = model;
+      const map = isObj(parsed?.buildings) ? parsed.buildings : isObj(parsed) ? parsed : {};
+      for (const b of withoutPhotos) { const l = cleanLook(map[b.id]); if (l) looks[b.id] = l; }
+    }
+  } catch (e) {
+    if (!Object.keys(looks).length) return res.status(502).json({ error: e.message });
+    // partial success (e.g. photo-based looks worked, the text batch failed): still return what we have
+  }
+
+  if (!Object.keys(looks).length) return res.status(502).json({ error: "Gemini did not return usable descriptions. Try again." });
+  res.json({ looks, model: usedModel || "gemini (photo-based)" });
 }));
 
 // ---------- static files (only these three, so .env and server.js can never be served) ----------
