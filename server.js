@@ -17,14 +17,14 @@ import { fileURLToPath } from "node:url";
 dotenv.config();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Be forgiving if the key was pasted into .env as JavaScript (const OPENAI_API_KEY = "sk-...";): use it, but say how to tidy it.
-if (!process.env.OPENAI_API_KEY) {
+// Be forgiving if the key was pasted into .env as JavaScript (const GEMINI_API_KEY = "...";): use it, but say how to tidy it.
+if (!process.env.GEMINI_API_KEY) {
   try {
     const txt = fs.readFileSync(path.join(__dirname, ".env"), "utf8");
-    const m = txt.match(/^\s*(?:const\s+|let\s+|export\s+)?OPENAI_API_KEY\s*[=:]\s*["'`]?\s*(sk-[^"'`\s;,]+)/m);
+    const m = txt.match(/^\s*(?:const\s+|let\s+|export\s+)?GEMINI_API_KEY\s*[=:]\s*["'`]?\s*([^"'`\s;,]+)/m);
     if (m) {
-      process.env.OPENAI_API_KEY = m[1];
-      console.warn('Note: OPENAI_API_KEY in .env is not in plain NAME=value form (it has const / quotes / a semicolon). Using it anyway - tidy it to:  OPENAI_API_KEY=sk-...');
+      process.env.GEMINI_API_KEY = m[1];
+      console.warn('Note: GEMINI_API_KEY in .env is not in plain NAME=value form. Using it anyway - tidy it to:  GEMINI_API_KEY=...');
     }
   } catch { /* no .env next to server.js */ }
 }
@@ -208,11 +208,10 @@ app.get("/api/recent", wrap(async (req, res) => {
   res.json(rows.map((r) => ({ ts: r.ts.toISOString(), scene: r.scene_key, action: r.action, label: r.label, session: r.session_id })));
 }));
 
-// ---------- AI: restyle the buildings near the player (OpenAI) ----------
-// explorer.html sends the closest few buildings (name, size, a few OpenStreetMap tags); one OpenAI call returns a small JSON
+// ---------- AI: restyle the buildings near the player (Gemini) ----------
+// explorer.html sends the closest few buildings (name, size, a few OpenStreetMap tags); one Gemini call returns a small JSON
 // "look" for each (materials, colours, glazing...) which the explorer applies. The API key stays here on the server.
-const OPENAI_BASE = (process.env.OPENAI_BASE_URL || "https://api.openai.com").replace(/\/+$/, "");
-const OPENAI_MODELS = process.env.OPENAI_MODEL ? [process.env.OPENAI_MODEL] : ["gpt-4o", "gpt-4o-mini"];   // the bigger model knows more real buildings
+const GEMINI_MODELS = process.env.GEMINI_MODEL ? [process.env.GEMINI_MODEL] : ["gemini-2.5-flash"];
 const MAX_BUILDINGS = 12;
 
 const LOOK_KEYS = `{
@@ -271,8 +270,8 @@ function parseJsonLoose(text) {
 const shortStr = (v, n) => (typeof v === "string" ? v.slice(0, n) : undefined);
 
 app.post("/api/restyle-nearby", wrap(async (req, res) => {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) return res.status(503).json({ error: "OPENAI_API_KEY is not set in .env (create one at https://platform.openai.com/api-keys), then restart the server." });
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return res.status(503).json({ error: "GEMINI_API_KEY is not set in .env (create one at https://aistudio.google.com/apikey), then restart the server." });
   const input = Array.isArray(req.body?.buildings) ? req.body.buildings.slice(0, MAX_BUILDINGS) : [];
   const list = [];
   for (const b of input) {
@@ -284,39 +283,44 @@ app.post("/api/restyle-nearby", wrap(async (req, res) => {
       footprintM2: Number.isFinite(b.areaM2) ? Math.round(b.areaM2) : null, tags });
   }
   if (!list.length) return res.status(400).json({ error: "buildings (a non-empty list) is required" });
-  const messages = [{ role: "user", content: LOOK_PROMPT(list) }];
+  const prompt = LOOK_PROMPT(list);
 
   let lastErr = "no model tried";
-  for (const model of OPENAI_MODELS) {
+  for (const model of GEMINI_MODELS) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 60000);
     try {
-      const r = await fetch(`${OPENAI_BASE}/v1/chat/completions`, {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-        body: JSON.stringify({ model, messages, response_format: { type: "json_object" }, max_completion_tokens: 4000 }),
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.4, responseMimeType: "application/json" }
+        }),
         signal: ctl.signal
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
         const msg = data?.error?.message || r.statusText;
-        lastErr = `OpenAI error ${r.status}: ${msg}`;
-        if (r.status === 401) lastErr = "OpenAI rejected the API key (401). Check OPENAI_API_KEY in .env.";
-        if (r.status === 429 && /quota|billing/i.test(msg)) lastErr = "OpenAI says this key has no credit left (429). Add billing/credit at platform.openai.com.";
-        if (r.status === 404 || (r.status === 400 && /model/i.test(msg))) continue;   // model name not available to this key: try the next one
+        lastErr = `Gemini error ${r.status}: ${msg}`;
+        if (r.status === 401 || r.status === 403) lastErr = "Gemini rejected the API key. Check GEMINI_API_KEY in .env.";
+        if (r.status === 429) lastErr = "Gemini rate limit or quota hit (429). Wait a bit, or enable billing at aistudio.google.com.";
+        if (r.status === 404) continue;   // model name not available: try the next one
         return res.status(502).json({ error: lastErr });
       }
-      const parsed = parseJsonLoose(data?.choices?.[0]?.message?.content || "");
+      const candidate = data?.candidates?.[0];
+      const text = candidate?.content?.parts?.[0]?.text || "";
+      const parsed = parseJsonLoose(text);
       const map = isObj(parsed?.buildings) ? parsed.buildings : isObj(parsed) ? parsed : {};
       const looks = {};
       for (const b of list) { const l = cleanLook(map[b.id]); if (l) looks[b.id] = l; }
       if (!Object.keys(looks).length) {
-        const why = data?.choices?.[0]?.message?.refusal || data?.choices?.[0]?.finish_reason || "unreadable answer";
-        return res.status(502).json({ error: `OpenAI did not return usable descriptions (${why}). Try again.` });
+        const why = candidate?.finishReason && candidate.finishReason !== "STOP" ? candidate.finishReason : "unreadable answer";
+        return res.status(502).json({ error: `Gemini did not return usable descriptions (${why}). Try again.` });
       }
       return res.json({ looks, model });
     } catch (e) {
-      lastErr = e.name === "AbortError" ? "OpenAI timed out" : "Could not reach OpenAI: " + e.message;
+      lastErr = e.name === "AbortError" ? "Gemini timed out" : "Could not reach Gemini: " + e.message;
     } finally { clearTimeout(timer); }
   }
   res.status(502).json({ error: lastErr });
@@ -337,8 +341,8 @@ const HOST = process.env.HOST || "127.0.0.1";   // set HOST=0.0.0.0 to let other
 initSchema()
   .then(() => app.listen(PORT, HOST, () => {
     console.log(`Waypoint server ready: http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}  (database connected${hasTimescale ? ", TimescaleDB hypertable on" : ", plain Postgres"})`);
-    console.log(process.env.OPENAI_API_KEY
-      ? "OpenAI key: found (AI restyle is ready)"
-      : `OpenAI key: NOT FOUND - add a line  OPENAI_API_KEY=sk-...  to ${path.join(process.cwd(), ".env")}  (no 'const', no quotes), save, and restart.`);
+    console.log(process.env.GEMINI_API_KEY
+  ? "Gemini key: found (AI restyle is ready)"
+  : `Gemini key: NOT FOUND - add a line  GEMINI_API_KEY=...  to ${path.join(process.cwd(), ".env")}  (no 'const', no quotes), save, and restart.`);
   }))
   .catch((err) => { console.error("Could not connect to / set up the database:", err.message); process.exit(1); });
