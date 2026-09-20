@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Map Picker</title>
+  <title>Waypoint – Pick an area</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%231d8fe1%27/%3E%3Cpath d=%27M16 26s-7-6-7-11a7 7 0 0 1 14 0c0 5-7 11-7 11z%27 fill=%27none%27 stroke=%27white%27 stroke-width=%272.4%27/%3E%3Ccircle cx=%2716%27 cy=%2715%27 r=%272.6%27 fill=%27white%27/%3E%3C/svg%3E" />
   <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
   <link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet" />
   <script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
@@ -36,6 +37,7 @@
       box-shadow: 0 8px 30px rgba(20, 32, 43, 0.18), 0 1px 3px rgba(20, 32, 43, 0.12);
       padding: 18px;
       z-index: 5;
+      scrollbar-width: thin; scrollbar-color: #c5d3df transparent;
     }
     .title { display: flex; align-items: center; gap: 10px; }
     .title .logo {
@@ -43,7 +45,7 @@
       background: linear-gradient(135deg, #37a8f5, var(--accent-dark));
       display: grid; place-items: center; color: #fff;
     }
-    .title h1 { font-size: 16px; margin: 0; line-height: 1.2; }
+    .title h1 { font-size: 17px; margin: 0; line-height: 1.2; letter-spacing: -0.01em; }
     .title p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
 
     .section { margin-top: 16px; }
@@ -77,9 +79,10 @@
 
     /* CTA */
     #confirm {
-      width: 100%; margin-top: 18px; padding: 12px 14px;
+      width: 100%; margin-top: 18px; padding: 13px 14px;
       border: 0; border-radius: 10px; cursor: pointer;
-      background: var(--accent); color: #fff; font-size: 14px; font-weight: 600;
+      background: var(--accent); color: #fff; font-size: 14px; font-weight: 700;
+      box-shadow: 0 6px 16px rgba(29, 143, 225, 0.28);
       display: flex; align-items: center; justify-content: center; gap: 8px;
       transition: background 0.12s, opacity 0.12s, transform 0.05s;
     }
@@ -114,6 +117,7 @@
     #searchBtn:disabled { opacity: 0.6; cursor: progress; }
     #searchNote { margin: 6px 2px 0; font-size: 11.5px; color: var(--muted); min-height: 14px; }
     #searchNote.warn { color: #b45309; }
+    #searchNote:empty { display: none; }
     #results { margin-top: 6px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #fff; }
     .result {
       display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line);
@@ -180,24 +184,52 @@
     body:not(.started) #panel { opacity: 0; transform: translateX(-16px); pointer-events: none; }
 
     #start {
-      position: absolute; inset: 0; z-index: 20;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      background: #f4f8fb; color: var(--ink);
+      position: absolute; inset: 0; z-index: 20; overflow: hidden;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px;
+      background:
+        radial-gradient(900px 520px at 12% 8%, rgba(55, 168, 245, 0.30), transparent 62%),
+        radial-gradient(800px 520px at 92% 92%, rgba(22, 115, 184, 0.24), transparent 62%),
+        #f4f8fb;
+      color: var(--ink);
       transition: opacity 0.4s ease, visibility 0.4s;
     }
+    #start::before {   /* faint map grid */
+      content: ""; position: absolute; inset: 0; pointer-events: none;
+      background-image:
+        linear-gradient(rgba(20, 32, 43, 0.055) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(20, 32, 43, 0.055) 1px, transparent 1px);
+      background-size: 52px 52px;
+      -webkit-mask-image: radial-gradient(ellipse at center, #000 25%, transparent 72%);
+      mask-image: radial-gradient(ellipse at center, #000 25%, transparent 72%);
+    }
+    #start > * { position: relative; }
     body.started #start { opacity: 0; visibility: hidden; pointer-events: none; }
+    #start .mark {
+      width: 64px; height: 64px; border-radius: 18px; color: #fff; display: grid; place-items: center; margin-bottom: 22px;
+      background: linear-gradient(135deg, #37a8f5, var(--accent-dark));
+      box-shadow: 0 12px 30px rgba(29, 143, 225, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+    }
     #start h1 {
-      margin: 0 0 28px; font-size: clamp(44px, 9vw, 80px);
-      font-weight: 800; letter-spacing: -0.03em; line-height: 1;
+      margin: 0 0 12px; font-size: clamp(44px, 9vw, 84px);
+      font-weight: 800; letter-spacing: -0.035em; line-height: 1;
+      background: linear-gradient(180deg, #14202b 30%, #1f5f92); -webkit-background-clip: text; background-clip: text;
+      color: transparent; -webkit-text-fill-color: transparent;
     }
+    #start .tag { margin: 0 0 30px; max-width: 460px; font-size: clamp(15px, 2.2vw, 18px); line-height: 1.5; color: var(--muted); }
     #startBtn {
-      padding: 14px 44px; border: 0; border-radius: 999px; cursor: pointer;
+      display: inline-flex; align-items: center; gap: 10px;
+      padding: 15px 38px 15px 44px; border: 0; border-radius: 999px; cursor: pointer;
       background: var(--accent); color: #fff;
-      font-size: 16px; font-weight: 700; font-family: inherit;
-      transition: background 0.12s, transform 0.12s;
+      font-size: 16px; font-weight: 700; font-family: inherit; letter-spacing: 0.02em;
+      box-shadow: 0 10px 26px rgba(29, 143, 225, 0.38);
+      transition: background 0.12s, transform 0.12s, box-shadow 0.12s;
     }
-    #startBtn:hover { background: var(--accent-dark); transform: translateY(-1px); }
+    #startBtn:hover { background: var(--accent-dark); transform: translateY(-2px); box-shadow: 0 14px 30px rgba(29, 143, 225, 0.42); }
+    #startBtn:hover svg { transform: translateX(3px); }
+    #startBtn svg { transition: transform 0.12s; }
     #startBtn:focus-visible { outline: 3px solid rgba(29, 143, 225, 0.4); outline-offset: 3px; }
+    #start .press { margin-top: 16px; font-size: 12px; color: #98a6b3; }
+    #start .press kbd { background: #e6edf3; color: var(--muted); }
   </style>
 </head>
 <body>
@@ -254,8 +286,13 @@
   <div id="toast"></div>
 
   <div id="start">
+    <div class="mark">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>
+    </div>
     <h1>WAYPOINT</h1>
-    <button id="startBtn">START</button>
+    <p class="tag">Explore Kitchener&ndash;Waterloo in 3D, then delete buildings and swap in your own.</p>
+    <button id="startBtn">Start <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+    <div class="press">or press <kbd>Enter &crarr;</kbd></div>
   </div>
 
   <script src="config.js"></script>
