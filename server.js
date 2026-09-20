@@ -285,11 +285,13 @@ app.post("/api/restyle-nearby", wrap(async (req, res) => {
   if (!list.length) return res.status(400).json({ error: "buildings (a non-empty list) is required" });
   const prompt = LOOK_PROMPT(list);
 
-  let lastErr = "no model tried";
-  for (const model of GEMINI_MODELS) {
+    let lastErr = "no model tried";
+  const attempts = GEMINI_MODELS.flatMap((m) => [m, m]);   // try each model, then give it one retry before moving on
+  for (const model of attempts) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 60000);
     try {
+      if (attempts.indexOf(model) !== attempts.lastIndexOf(model)) await new Promise((r) => setTimeout(r, 1200));   // brief pause before a same-model retry
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
@@ -305,7 +307,7 @@ app.post("/api/restyle-nearby", wrap(async (req, res) => {
         lastErr = `Gemini error ${r.status}: ${msg}`;
         if (r.status === 401 || r.status === 403) lastErr = "Gemini rejected the API key. Check GEMINI_API_KEY in .env.";
         if (r.status === 429) lastErr = "Gemini rate limit or quota hit (429). Wait a bit, or enable billing at aistudio.google.com.";
-        if (r.status === 404) continue;   // model name not available: try the next one
+        if (r.status === 404 || r.status === 429 || r.status === 503) continue;   // model not available, rate-limited, or briefly overloaded: try the next one (or retry the same one below)
         return res.status(502).json({ error: lastErr });
       }
       const candidate = data?.candidates?.[0];
