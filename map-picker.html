@@ -45,6 +45,11 @@
       background: linear-gradient(135deg, #37a8f5, var(--accent-dark));
       display: grid; place-items: center; color: #fff;
     }
+    .iconbtn {
+      margin-left: auto; flex: none; width: 30px; height: 30px; border: 0; border-radius: 8px; cursor: pointer;
+      display: grid; place-items: center; background: transparent; color: var(--muted); transition: background 0.12s, color 0.12s;
+    }
+    .iconbtn:hover { background: #e9eff5; color: var(--ink); }
     .title h1 { font-size: 17px; margin: 0; line-height: 1.2; letter-spacing: -0.01em; }
     .title p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
 
@@ -180,29 +185,69 @@
     }
 
     /* ---------- start screen ---------- */
-    #panel { transition: opacity 0.5s ease 0.15s, transform 0.5s ease 0.15s; }
+    #panel { transition: opacity 0.5s ease 0.15s, transform 0.5s ease 0.15s, visibility 0s; }
     body:not(.started) #panel { opacity: 0; transform: translateX(-16px); pointer-events: none; }
+    /* tucked away by the X button; tapping the map brings it back */
+    body.panelHidden #panel {
+      opacity: 0; transform: translateX(-24px) scale(0.98); pointer-events: none; visibility: hidden;
+      transition: opacity 0.35s ease, transform 0.35s ease, visibility 0s linear 0.35s;
+    }
 
     #start {
       position: absolute; inset: 0; z-index: 20; overflow: hidden;
       display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px;
-      background:
-        radial-gradient(900px 520px at 12% 8%, rgba(55, 168, 245, 0.30), transparent 62%),
-        radial-gradient(800px 520px at 92% 92%, rgba(22, 115, 184, 0.24), transparent 62%),
-        #f4f8fb;
-      color: var(--ink);
+      background: linear-gradient(to bottom, #0b0b2b, #1b2735 70%, #090a0f);   /* night sky */
+      color: #fff;
       transition: opacity 0.4s ease, visibility 0.4s;
     }
-    #start::before {   /* faint map grid */
-      content: ""; position: absolute; inset: 0; pointer-events: none;
-      background-image:
-        linear-gradient(rgba(20, 32, 43, 0.055) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(20, 32, 43, 0.055) 1px, transparent 1px);
-      background-size: 52px 52px;
-      -webkit-mask-image: radial-gradient(ellipse at center, #000 25%, transparent 72%);
-      mask-image: radial-gradient(ellipse at center, #000 25%, transparent 72%);
-    }
     #start > * { position: relative; }
+    #start > .sky { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+
+    /* twinkling stars + shooting stars */
+    .sky .stars {
+      width: 1px; height: 1px; position: absolute; background: white;
+      box-shadow: 2vw 5vh 2px white, 10vw 8vh 2px white, 15vw 15vh 1px white,
+        22vw 22vh 1px white, 28vw 12vh 2px white, 32vw 32vh 1px white,
+        38vw 18vh 2px white, 42vw 35vh 1px white, 48vw 25vh 2px white,
+        53vw 42vh 1px white, 58vw 15vh 2px white, 63vw 38vh 1px white,
+        68vw 28vh 2px white, 73vw 45vh 1px white, 78vw 32vh 2px white,
+        83vw 48vh 1px white, 88vw 20vh 2px white, 93vw 52vh 1px white,
+        98vw 35vh 2px white, 5vw 60vh 1px white, 12vw 65vh 2px white,
+        18vw 72vh 1px white, 25vw 78vh 2px white, 30vw 85vh 1px white,
+        35vw 68vh 2px white, 40vw 82vh 1px white, 45vw 92vh 2px white,
+        50vw 75vh 1px white, 55vw 88vh 2px white, 60vw 95vh 1px white,
+        65vw 72vh 2px white, 70vw 85vh 1px white, 75vw 78vh 2px white,
+        80vw 92vh 1px white, 85vw 82vh 2px white, 90vw 88vh 1px white,
+        95vw 75vh 2px white;
+      animation: twinkle 8s infinite linear;
+    }
+    .sky .stars::after {   /* more stars, twinkling on a different beat */
+      content: ""; position: absolute; width: 1px; height: 1px; background: white;
+      box-shadow: 8vw 12vh 2px white, 16vw 18vh 1px white, 24vw 25vh 2px white,
+        33vw 15vh 1px white, 41vw 28vh 2px white, 49vw 35vh 1px white,
+        57vw 22vh 2px white, 65vw 42vh 1px white, 73vw 28vh 2px white,
+        81vw 48vh 1px white, 89vw 32vh 2px white, 97vw 45vh 1px white,
+        3vw 68vh 2px white, 11vw 75vh 1px white, 19vw 82vh 2px white,
+        27vw 88vh 1px white, 35vw 72vh 2px white, 43vw 85vh 1px white,
+        51vw 92vh 2px white, 59vw 78vh 1px white;
+      animation: twinkle 6s infinite linear reverse;
+    }
+    .sky .shooting-star {
+      position: absolute; width: 100px; height: 2px; left: -100px;
+      background: linear-gradient(90deg, white, transparent);
+      animation: shoot 3s infinite ease-in; opacity: 0;
+    }
+    .sky .shooting-star:nth-child(2) { top: 20%; animation-delay: 0s; }
+    .sky .shooting-star:nth-child(3) { top: 35%; animation-delay: 1s; }
+    .sky .shooting-star:nth-child(4) { top: 50%; animation-delay: 2s; }
+    .sky .shooting-star:nth-child(5) { top: 8%;  animation-delay: 3.5s; animation-duration: 4s; }
+    .sky .shooting-star:nth-child(6) { top: 62%; animation-delay: 5s;   animation-duration: 4s; }
+    @keyframes twinkle { 0%, 100% { opacity: 0.8; } 50% { opacity: 0.4; } }
+    @keyframes shoot {
+      0%   { transform: translateX(0) translateY(0) rotate(25deg); opacity: 1; }
+      100% { transform: translateX(120vw) translateY(50vh) rotate(25deg); opacity: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) { .sky .stars, .sky .stars::after, .sky .shooting-star { animation: none; } .sky .shooting-star { display: none; } }
     body.started #start { opacity: 0; visibility: hidden; pointer-events: none; }
     #start .mark {
       width: 64px; height: 64px; border-radius: 18px; color: #fff; display: grid; place-items: center; margin-bottom: 22px;
@@ -212,10 +257,10 @@
     #start h1 {
       margin: 0 0 12px; font-size: clamp(44px, 9vw, 84px);
       font-weight: 800; letter-spacing: -0.035em; line-height: 1;
-      background: linear-gradient(180deg, #14202b 30%, #1f5f92); -webkit-background-clip: text; background-clip: text;
+      background: linear-gradient(180deg, #ffffff 30%, #9fd3f7); -webkit-background-clip: text; background-clip: text;
       color: transparent; -webkit-text-fill-color: transparent;
     }
-    #start .tag { margin: 0 0 30px; max-width: 460px; font-size: clamp(15px, 2.2vw, 18px); line-height: 1.5; color: var(--muted); }
+    #start .tag { margin: 0 0 30px; max-width: 460px; font-size: clamp(15px, 2.2vw, 18px); line-height: 1.5; color: #b9c7d6; }
     #startBtn {
       display: inline-flex; align-items: center; gap: 10px;
       padding: 15px 38px 15px 44px; border: 0; border-radius: 999px; cursor: pointer;
@@ -239,8 +284,8 @@
     }
     #convertBtn:hover { background: var(--accent); color: #fff; transform: translateY(-2px); box-shadow: 0 12px 26px rgba(29, 143, 225, 0.32); }
     #convertBtn:focus-visible { outline: 3px solid rgba(29, 143, 225, 0.4); outline-offset: 3px; }
-    #start .press { margin-top: 16px; font-size: 12px; color: #98a6b3; }
-    #start .press kbd { background: #e6edf3; color: var(--muted); }
+    #start .press { margin-top: 16px; font-size: 12px; color: #8b9bb0; }
+    #start .press kbd { background: rgba(255, 255, 255, 0.14); color: #d6e2ee; }
   </style>
 </head>
 <body>
@@ -255,6 +300,7 @@
         <h1>Pick an area</h1>
         <p>Kitchener &ndash; Waterloo</p>
       </div>
+      <button id="panelHide" class="iconbtn" type="button" title="Hide panel (tap the map to bring it back)" aria-label="Hide this panel"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M11 6l-6 6 6 6M19 6l-6 6 6 6"/></svg></button>
     </div>
 
     <div class="section">
@@ -297,6 +343,14 @@
   <div id="toast"></div>
 
   <div id="start">
+    <div class="sky" aria-hidden="true">
+      <div class="stars"></div>
+      <div class="shooting-star"></div>
+      <div class="shooting-star"></div>
+      <div class="shooting-star"></div>
+      <div class="shooting-star"></div>
+      <div class="shooting-star"></div>
+    </div>
     <div class="mark">
       <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>
     </div>
@@ -330,11 +384,12 @@
       { name: "Downtown Kitchener", lngLat: [-80.4925, 43.4516] },
       { name: "Conestoga Mall", lngLat: [-80.5215, 43.5002] }
     ];
-    const RADIUS_PRESETS = [100, 300, 500];
+    const MAX_RADIUS = 300;                       // the explorer is capped at 300 m
+    const RADIUS_PRESETS = [100, 200, 300];
 
     // ---------- state ----------
     let center = null;
-    let radiusMeters = 300;
+    let radiusMeters = MAX_RADIUS;
     let marker = null;
 
     const $ = (id) => document.getElementById(id);
@@ -482,8 +537,18 @@
       return true;
     }
 
+    // ---------- hide / show the panel ----------
+    function showPanel() { document.body.classList.remove("panelHidden"); }
+    $("panelHide").addEventListener("click", () => {
+      document.body.classList.add("panelHidden");
+      toast("Tap the map to bring the menu back");
+    });
+
     // ---------- events ----------
-    map.on("click", (e) => setCenter([e.lngLat.lng, e.lngLat.lat]));
+    map.on("click", (e) => {
+      showPanel();                                         // a tap anywhere on the map brings the panel back
+      setCenter([e.lngLat.lng, e.lngLat.lat]);
+    });
 
     // cursor feedback: crosshair inside the area, not-allowed outside
     map.on("mousemove", (e) => {
@@ -683,7 +748,7 @@
         d.textContent = sc.lastLabel || "";
         b.append(t, d, n);
         b.onclick = () => {
-          if (Number.isInteger(sc.radius)) radiusMeters = sc.radius;
+          if (Number.isInteger(sc.radius)) radiusMeters = Math.min(sc.radius, MAX_RADIUS);
           setCenter([sc.lng, sc.lat], { fly: true, zoom: 16.5 });
         };
         box.appendChild(b);
@@ -695,7 +760,7 @@
       try {
         const rows = await fetchJSON(API + "/api/scenes?limit=8", {}, 5000);
         savedScenes = (Array.isArray(rows) ? rows : []).filter((r) =>
-          Number.isFinite(r.lat) && Number.isFinite(r.lng) && Number.isInteger(r.radius));
+          Number.isFinite(r.lat) && Number.isFinite(r.lng) && Number.isInteger(r.radius) && r.radius <= MAX_RADIUS);
       } catch (e) { savedScenes = []; }   // no server / no database: hide the section
       refresh();
     }

@@ -321,7 +321,7 @@
     const params = new URLSearchParams(window.location.search);
     let centerLat = parseFloat(params.get("lat"));
     let centerLng = parseFloat(params.get("lng"));
-    const radiusMeters = parseFloat(params.get("radius")) || 300;
+    const radiusMeters = Math.min(parseFloat(params.get("radius")) || 300, 300);   // 300 m is the largest area we build
 
     // If this page is opened directly (no ?lat=&lng=), fall back to UWaterloo so it still works.
     if (!Number.isFinite(centerLat) || !Number.isFinite(centerLng)) {
